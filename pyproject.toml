@@ -1,0 +1,36 @@
+[project]
+name = "gb-sources-separation"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "torchvision",
+    "scikit-learn>=1.8.0",
+    "jupyter>=1.1.1",
+    "ipykernel>=7.2.0",
+    "h5py>=3.16.0",
+    "rich>=15.0.0",
+    "matplotlib>=3.10.9",
+    "aim>=3.29.1",
+    "pandas>=3.0.2",
+    # CUDA dependencies for Linux
+    "nvidia-cudnn-cu12==9.19.0.56 ; sys_platform == 'linux'",
+    "nvidia-cusparselt-cu12==0.7.1 ; sys_platform == 'linux'",
+    "nvidia-nccl-cu12==2.28.9 ; sys_platform == 'linux'",
+    "nvidia-nvshmem-cu12==3.4.5 ; sys_platform == 'linux'",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'"
+]
