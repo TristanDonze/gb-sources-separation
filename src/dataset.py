@@ -45,7 +45,7 @@ class GalacticBinariesDataset(Dataset):
         self.seed = seed
         self.rng = np.random.default_rng(seed)
 
-        if constant_K == True:
+        if constant_K is True:
             raise ValueError("constant_K cannot be True. It must be either False or an integer value.")
         
         if self.max_K > self.nb_selected_waveforms:
