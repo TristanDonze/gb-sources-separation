@@ -3,7 +3,7 @@ import torch.nn as nn
 from src.modules import ConvEncoder, TimeEmbedding, AxialSeparatorBlock
 
 class FlowSeparator(nn.Module):
-    def __init__(self, input_channels: int = 4, max_k: int = 2, n_blocks: int = 4, dim_model: int = 256, n_heads: int = 4, dim_feedforward: int = 256, dropout: float = 0.1):
+    def __init__(self, input_channels: int = 4, max_k: int = 2, n_blocks: int = 4, dim_model: int = 256, n_heads: int = 4, dim_feedforward: int = 512, dropout: float = 0.1):
         super().__init__()
 
         self.mixture_encoder = ConvEncoder(input_channels, dim_model, dropout)
