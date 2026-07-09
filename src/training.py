@@ -1,7 +1,6 @@
 import torch
-from torch.nn.functional import mse_loss
 
-def train_one_epoch(model, dataloader, optimizer, device):
+def train_one_epoch(model, dataloader, optimizer, criterion, device):
     model.train()
     total_loss = 0.0
     
@@ -13,9 +12,9 @@ def train_one_epoch(model, dataloader, optimizer, device):
         K = K.to(device)
 
         S_bar = mixture[:, None, :, :] / L
-        S_bar = S_bar.repeat(1, L, 1, 1).to(device)
+        S_bar = S_bar.repeat(1, L, 1, 1)
 
-        Z = torch.randn_like(X_1).to(device)
+        Z = torch.randn_like(X_1)
         Z = Z - Z.mean(dim=1, keepdim=True)
 
         X_0 = S_bar + Z
@@ -25,10 +24,9 @@ def train_one_epoch(model, dataloader, optimizer, device):
 
         X_t = (1 - t_view) * X_0 + t_view * X_1
 
-        u = X_1 - X_0
         v = model(X_t, t, mixture, K)
 
-        loss = mse_loss(v, u)
+        loss = criterion(v, X_0, X_1)
 
         optimizer.zero_grad()
         loss.backward()
@@ -47,6 +45,7 @@ if __name__ == "__main__":
     from src.model import FlowSeparator
     from src.dataset import create_train_val_datasets
     from torch.utils.data import DataLoader
+    from src.losses import FlowMatchingPIT_MSELoss
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device : {device}")
@@ -73,8 +72,8 @@ if __name__ == "__main__":
     )
 
     dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-
+    criterion = FlowMatchingPIT_MSELoss()
     model = FlowSeparator().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2)
 
-    train_one_epoch(model, dataloader, optimizer, device)
+    train_one_epoch(model, dataloader, optimizer, criterion, device)
