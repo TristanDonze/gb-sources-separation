@@ -1,7 +1,23 @@
 import torch
 import torch.nn as nn
-from torch.nn.functional import mse_loss
 from scipy.optimize import linear_sum_assignment
+
+
+def hungarian_mean_loss(cost):
+    B = cost.shape[0]
+    cost_cpu = cost.detach().cpu().float().numpy()
+
+    losses = []
+
+    for b in range(B):
+        row_ind, col_ind = linear_sum_assignment(cost_cpu[b])
+
+        row_ind = torch.as_tensor(row_ind, device=cost.device)
+        col_ind = torch.as_tensor(col_ind, device=cost.device)
+
+        losses.append(cost[b, row_ind, col_ind].mean())
+
+    return torch.stack(losses).mean()
 
 
 class FlowMatchingPIT_Loss(nn.Module):
@@ -9,10 +25,17 @@ class FlowMatchingPIT_Loss(nn.Module):
         super().__init__()
         self.residual_weight = residual_weight
 
-    def compute_loss(self, predictions, targets):
+    def pairwise_cost(self, diff):
+        raise NotImplementedError
+
+    def scalar_loss(self, diff):
         raise NotImplementedError
 
     def forward(self, v_pred, X_0, X_1):
+        # v_pred: (B, K+1, C, F)
+        # X_0:    (B, K+1, C, F)
+        # X_1:    (B, K+1, C, F)
+
         assert v_pred.shape == X_0.shape == X_1.shape
 
         pred_sources = v_pred[:, :-1]
@@ -24,41 +47,21 @@ class FlowMatchingPIT_Loss(nn.Module):
         X0_residual = X_0[:, -1]
         X1_residual = X_1[:, -1]
 
-        B, K, C, F = pred_sources.shape
+        # target_velocity[b, i, j] = X1_source[j] - X0_slot[i]
+        target_velocity = X1_sources[:, None] - X0_sources[:, :, None]
+        # (B, K_pred, K_true, C, F)
 
-        source_losses = []
+        diff = pred_sources[:, :, None] - target_velocity
+        # (B, K_pred, K_true, C, F)
 
-        for b in range(B):
-            cost = torch.zeros(
-                (K, K),
-                device=v_pred.device,
-                dtype=v_pred.dtype,
-            )
+        cost = self.pairwise_cost(diff)
+        # (B, K, K)
 
-            for i in range(K):
-                for j in range(K):
-                    target_velocity = X1_sources[b, j] - X0_sources[b, i]
-                    cost[i, j] = self.compute_loss(
-                        pred_sources[b, i],
-                        target_velocity,
-                    )
-
-            row_ind, col_ind = linear_sum_assignment(
-                cost.detach().cpu().numpy()
-            )
-
-            row_ind = torch.as_tensor(row_ind, device=v_pred.device)
-            col_ind = torch.as_tensor(col_ind, device=v_pred.device)
-
-            source_losses.append(cost[row_ind, col_ind].mean())
-
-        source_loss = torch.stack(source_losses).mean()
+        source_loss = hungarian_mean_loss(cost)
 
         residual_target_velocity = X1_residual - X0_residual
-        residual_loss = self.compute_loss(
-            pred_residual,
-            residual_target_velocity,
-        )
+        residual_diff = pred_residual - residual_target_velocity
+        residual_loss = self.scalar_loss(residual_diff)
 
         return source_loss + self.residual_weight * residual_loss
 
@@ -68,10 +71,16 @@ class ReconstructionPIT_Loss(nn.Module):
         super().__init__()
         self.residual_weight = residual_weight
 
-    def compute_loss(self, predictions, targets):
+    def pairwise_cost(self, diff):
+        raise NotImplementedError
+
+    def scalar_loss(self, diff):
         raise NotImplementedError
 
     def forward(self, predictions, targets):
+        # predictions: (B, K+1, C, F)
+        # targets:     (B, K+1, C, F)
+
         assert predictions.shape == targets.shape
 
         pred_sources = predictions[:, :-1]
@@ -80,41 +89,26 @@ class ReconstructionPIT_Loss(nn.Module):
         pred_residual = predictions[:, -1]
         true_residual = targets[:, -1]
 
-        B, K, C, F = pred_sources.shape
+        diff = pred_sources[:, :, None] - true_sources[:, None]
+        # (B, K_pred, K_true, C, F)
 
-        source_losses = []
+        cost = self.pairwise_cost(diff)
+        # (B, K, K)
 
-        for b in range(B):
-            cost = torch.zeros(
-                (K, K),
-                device=predictions.device,
-                dtype=predictions.dtype,
-            )
+        source_loss = hungarian_mean_loss(cost)
 
-            for i in range(K):
-                for j in range(K):
-                    cost[i, j] = self.compute_loss(
-                        pred_sources[b, i],
-                        true_sources[b, j],
-                    )
+        residual_diff = pred_residual - true_residual
+        residual_loss = self.scalar_loss(residual_diff)
 
-            row_ind, col_ind = linear_sum_assignment(
-                cost.detach().cpu().numpy()
-            )
+        return source_loss + self.residual_weight * residual_loss
 
-            row_ind = torch.as_tensor(row_ind, device=predictions.device)
-            col_ind = torch.as_tensor(col_ind, device=predictions.device)
-
-            source_losses.append(cost[row_ind, col_ind].mean())
-
-        source_loss = torch.stack(source_losses).mean()
-        residual_loss = self.compute_loss(pred_residual, true_residual)
-
-        return source_loss + self.residual_weight * residual_loss 
 
 class FlowMatchingPIT_MSELoss(FlowMatchingPIT_Loss):
-    def compute_loss(self, predictions, targets):
-        return mse_loss(predictions, targets, reduction="mean")
+    def pairwise_cost(self, diff):
+        return diff.pow(2).mean(dim=(-1, -2))
+
+    def scalar_loss(self, diff):
+        return diff.pow(2).mean()
 
 
 class FlowMatchingPIT_RMSELoss(FlowMatchingPIT_Loss):
@@ -122,14 +116,19 @@ class FlowMatchingPIT_RMSELoss(FlowMatchingPIT_Loss):
         super().__init__(residual_weight=residual_weight)
         self.eps = eps
 
-    def compute_loss(self, predictions, targets):
-        return torch.sqrt(
-            mse_loss(predictions, targets, reduction="mean") + self.eps
-        )
-    
+    def pairwise_cost(self, diff):
+        return torch.sqrt(diff.pow(2).mean(dim=(-1, -2)) + self.eps)
+
+    def scalar_loss(self, diff):
+        return torch.sqrt(diff.pow(2).mean() + self.eps)
+
+
 class ReconstructionPIT_MSELoss(ReconstructionPIT_Loss):
-    def compute_loss(self, predictions, targets):
-        return mse_loss(predictions, targets, reduction="mean")
+    def pairwise_cost(self, diff):
+        return diff.pow(2).mean(dim=(-1, -2))
+
+    def scalar_loss(self, diff):
+        return diff.pow(2).mean()
 
 
 class ReconstructionPIT_RMSELoss(ReconstructionPIT_Loss):
@@ -137,7 +136,8 @@ class ReconstructionPIT_RMSELoss(ReconstructionPIT_Loss):
         super().__init__(residual_weight=residual_weight)
         self.eps = eps
 
-    def compute_loss(self, predictions, targets):
-        return torch.sqrt(
-            mse_loss(predictions, targets, reduction="mean") + self.eps
-        )
+    def pairwise_cost(self, diff):
+        return torch.sqrt(diff.pow(2).mean(dim=(-1, -2)) + self.eps)
+
+    def scalar_loss(self, diff):
+        return torch.sqrt(diff.pow(2).mean() + self.eps)
