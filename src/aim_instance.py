@@ -1,6 +1,6 @@
 from aim import Run
 
-aim_run = Run(experiment="gb-source-counting")
+aim_run = Run(experiment="gb-sources-separation")
 
 def track_metric(
     name,
