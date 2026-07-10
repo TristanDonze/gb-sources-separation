@@ -38,7 +38,7 @@ NB_EPOCHS = 50
 LR = 1e-3
 LR_MIN = 1e-6
 FACTOR = 0.5
-PATIENCE = 5
+PATIENCE = 8
 
 # Validation Hyperparameters
 
