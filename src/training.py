@@ -1,43 +1,56 @@
+import logging
+
 import torch
 
-def train_one_epoch(model, dataloader, optimizer, criterion, device):
+from src.timing import StageTimer
+
+logger = logging.getLogger(__name__)
+
+
+def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True):
     model.train()
     total_loss = 0.0
-    
-    for batch_idx, (mixture, X_1, K) in enumerate(dataloader):
+    timer = StageTimer(device, logger, prefix="Training", enabled=timing)
+
+    for mixture, X_1, K in timer.iter_batches(dataloader):
         B, L, _, _ = X_1.shape
 
-        mixture = mixture.to(device)
-        X_1 = X_1.to(device)
-        K = K.to(device)
+        with timer.measure("to_device"):
+            mixture = mixture.to(device)
+            X_1 = X_1.to(device)
+            K = K.to(device)
 
-        S_bar = mixture[:, None, :, :] / L
-        S_bar = S_bar.repeat(1, L, 1, 1)
+        with timer.measure("prepare"):
+            S_bar = mixture[:, None, :, :] / L
+            S_bar = S_bar.repeat(1, L, 1, 1)
 
-        Z = torch.randn_like(X_1)
-        Z = Z - Z.mean(dim=1, keepdim=True)
+            Z = torch.randn_like(X_1)
+            Z = Z - Z.mean(dim=1, keepdim=True)
 
-        X_0 = S_bar + Z
+            X_0 = S_bar + Z
 
-        t = torch.rand(B, device=mixture.device)
-        t_view = t[:, None, None, None]
+            t = torch.rand(B, device=mixture.device)
+            t_view = t[:, None, None, None]
 
-        X_t = (1 - t_view) * X_0 + t_view * X_1
+            X_t = (1 - t_view) * X_0 + t_view * X_1
 
-        v = model(X_t, t, mixture, K)
+        with timer.measure("model_forward"):
+            v = model(X_t, t, mixture, K)
 
-        loss = criterion(v, X_0, X_1)
+        with timer.measure("loss_backward_step"):
+            loss = criterion(v, X_0, X_1)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
         loss_value = loss.item()
         total_loss += loss_value
 
+    timer.log()
+
     avg_loss = total_loss / len(dataloader)
     return avg_loss
-
 
 
 if __name__ == "__main__":

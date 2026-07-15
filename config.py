@@ -31,7 +31,8 @@ MAX_K = 2
 CONSTANT_K = 2
 BATCH_SIZE = 480
 WEIGHT_DECAY = 1e-4
-NB_EPOCHS = 50
+NB_EPOCHS = 30
+ENABLE_TIMING = True  # Synchronizes CUDA stages; disable for maximum throughput.
 
 # Scheduler : 
 

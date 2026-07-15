@@ -33,6 +33,7 @@ from config import (
     BATCH_SIZE,
     WEIGHT_DECAY,
     NB_EPOCHS,
+    ENABLE_TIMING,
     LR,
     LR_MIN,
     FACTOR,
@@ -132,12 +133,14 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             optimizer,
             train_criterion,
             device,
+            timing=ENABLE_TIMING,
         )
         val_loss = evaluate(
             model,
             val_loader,
             val_criterion,
             device,
+            timing=ENABLE_TIMING,
         )
 
 

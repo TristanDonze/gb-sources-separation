@@ -1,5 +1,11 @@
+import logging
+
 import torch
 from config import NB_OF_STEPS
+
+from src.timing import StageTimer
+
+logger = logging.getLogger(__name__)
 
 
 def build_initial_state(mixture, X_1, generator=None):
@@ -19,7 +25,7 @@ def build_initial_state(mixture, X_1, generator=None):
     return S_bar + Z
 
 
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, timing=True):
     model.eval()
 
     total_loss = 0.0
@@ -29,14 +35,19 @@ def evaluate(model, dataloader, criterion, device):
     generator = torch.Generator(device=device)
     generator.manual_seed(0)
 
+    timer = StageTimer(device, logger, prefix="Validation", enabled=timing)
+
     with torch.no_grad():
-        for batch_idx, (mixture, X_1, K) in enumerate(dataloader):
-            mixture = mixture.to(device)
-            X_1 = X_1.to(device)
-            K = K.to(device)
+        for mixture, X_1, K in timer.iter_batches(dataloader):
+            with timer.measure("to_device"):
+                mixture = mixture.to(device)
+                X_1 = X_1.to(device)
+                K = K.to(device)
 
             B = X_1.shape[0]
-            X_t = build_initial_state(mixture, X_1, generator=generator)
+
+            with timer.measure("initial_state"):
+                X_t = build_initial_state(mixture, X_1, generator=generator)
 
             for step in range(NB_OF_STEPS):
                 t_val = step * dt
@@ -47,14 +58,25 @@ def evaluate(model, dataloader, criterion, device):
                     dtype=mixture.dtype,
                 )
 
-                v = model(X_t, t, mixture, K)
+                with timer.measure("model_forward"):
+                    v = model(X_t, t, mixture, K)
+
                 X_t = X_t + dt * v
 
             X_hat = X_t
-            loss = criterion(X_hat, X_1)
+
+            with timer.measure("criterion"):
+                loss = criterion(X_hat, X_1)
 
             total_loss += loss.item() * B
             total_samples += B
 
     average_loss = total_loss / total_samples
+    timer.log(
+        renamed_averages={"model_forward": "model_forward_per_call"},
+        extra_averages={
+            "model_forward_per_batch": ("model_forward", len(dataloader)),
+        },
+    )
+
     return average_loss
