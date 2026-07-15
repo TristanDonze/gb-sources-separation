@@ -9,16 +9,16 @@ large_dataset_path = Path("/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_datase
 huge_dataset_path = Path("/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_dataset/dataset_10M_uniform_SNR_10_100/dataset.hdf5")
 
 # Medium Config
-dataset_path = huge_dataset_path
-TRAIN_SIZE = 0.6
-MAX_SAMPLES_TRAIN = 3_000_000
-MAX_SAMPLES_VAL = 50_000
+dataset_path = medium_dataset_path
+TRAIN_SIZE = 0.8
+MAX_SAMPLES_TRAIN = 100_000
+MAX_SAMPLES_VAL = 10_000
 
 # Huge Config
 # dataset_path = huge_dataset_path
 # TRAIN_SIZE = 0.5
-# MAX_SAMPLES_TRAIN = None
-# MAX_SAMPLES_VAL = 500_000
+# MAX_SAMPLES_TRAIN = 3_000_000
+# MAX_SAMPLES_VAL = 50_000
 
 SPLIT_STRATEGY = "snr" # "random" or "snr"
 SEED_TRAIN = 42
