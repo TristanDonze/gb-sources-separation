@@ -28,9 +28,15 @@ class RunManager:
         self.model_path = Path("src/model.py")
         with open(self.model_path, "r") as f:
             model_code = f.read()
+        
+        self.config_path = Path("config.py")
+        with open(self.config_path, "r") as f:
+            config_code = f.read()
             
         with open(os.path.join(self._checkpoint_dir, "model_structure.py"), "w") as f:
             f.write(model_code)
+        with open(os.path.join(self._checkpoint_dir, "used_config.py"), "w") as f:
+            f.write(config_code)
 
         self.save_aim_hash()
 
