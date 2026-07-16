@@ -9,7 +9,7 @@ class StageTimer:
     """Collect and log timings while keeping instrumentation out of business logic."""
 
     def __init__(self, device, logger, prefix, enabled=True):
-        self.device = torch.device(device)
+        self.device = device
         self.logger = logger
         self.prefix = prefix
         self.enabled = enabled

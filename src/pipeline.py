@@ -12,7 +12,7 @@ from src.losses import (
 )
 from src.training import train_one_epoch
 from src.validation import evaluate
-from src.utils import save_checkpoint, load_checkpoint
+from src.utils import get_device, save_checkpoint, load_checkpoint
 from src.aim_instance import aim_run, track_metric
 
 
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 def train(checkpoint_dir, load_checkpoint_path=None):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_device()
     logger.info(f"Using device: {device}")
 
     train_criterion = FlowMatchingPIT_MSELoss()

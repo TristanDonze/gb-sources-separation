@@ -1,6 +1,17 @@
 import os
 import torch
 
+def get_device():
+    free_memory = []
+
+    for i in range(torch.cuda.device_count()):
+        free, total = torch.cuda.mem_get_info(i)
+        free_memory.append(free)
+
+    best_gpu = free_memory.index(max(free_memory))
+
+    device = torch.device(f"cuda:{best_gpu}")
+    return device
 
 def save_checkpoint(
     model,
