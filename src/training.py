@@ -7,6 +7,22 @@ from src.timing import StageTimer
 logger = logging.getLogger(__name__)
 
 
+def build_initial_state(mixture, X_1, generator=None):
+    B, L, _, _ = X_1.shape
+
+    S_bar = mixture[:, None, :, :] / L
+    S_bar = S_bar.repeat(1, L, 1, 1)
+
+    Z = torch.randn(
+        X_1.shape,
+        device=X_1.device,
+        dtype=X_1.dtype,
+        generator=generator,
+    )
+    Z = Z - Z.mean(dim=1, keepdim=True)
+
+    return S_bar + Z
+
 def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True):
     model.train()
     total_loss = 0.0
@@ -21,13 +37,7 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
             K = K.to(device)
 
         with timer.measure("prepare"):
-            S_bar = mixture[:, None, :, :] / L
-            S_bar = S_bar.repeat(1, L, 1, 1)
-
-            Z = torch.randn_like(X_1)
-            Z = Z - Z.mean(dim=1, keepdim=True)
-
-            X_0 = S_bar + Z
+            X_0 = build_initial_state(mixture, X_1)
 
             t = torch.rand(B, device=mixture.device)
             t_view = t[:, None, None, None]
