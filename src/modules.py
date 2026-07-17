@@ -33,7 +33,7 @@ class ConvEncoder(nn.Module):
         for i in range(len(channels) - 1):
             self.conv_encoder.add_module(f'conv_{i+1}', nn.Conv1d(channels[i], channels[i+1], kernel_size = 7 if i == 0 else 5, padding="same"))
             self.conv_encoder.add_module(f'layernorm_{i+1}', PermutedLayerNorm(channels[i+1]))
-            self.conv_encoder.add_module(f'relu_{i+1}', nn.GELU())
+            self.conv_encoder.add_module(f'gelu_{i+1}', nn.GELU())
             self.conv_encoder.add_module(f'dropout_{i+1}', nn.Dropout(dropout))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
