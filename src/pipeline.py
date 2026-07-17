@@ -12,7 +12,13 @@ from src.losses import (
 )
 from src.training import train_one_epoch
 from src.validation import evaluate
-from src.utils import get_device, save_checkpoint, load_checkpoint
+from src.utils import (
+    get_device,
+    load_checkpoint,
+    save_checkpoint,
+    seed_everything,
+    seed_worker,
+)
 from src.aim_instance import aim_run, track_metric
 
 
@@ -24,7 +30,9 @@ from config import (
     MAX_SAMPLES_VAL,
     SPLIT_STRATEGY,
 
+    FIX_ALL_SEEDS,
     SPLIT_SEED,
+    SEED,
     SEED_TRAIN,
     SEED_VAL,
 
@@ -44,6 +52,10 @@ logger = logging.getLogger(__name__)
 
 
 def train(checkpoint_dir, load_checkpoint_path=None):
+    if FIX_ALL_SEEDS:
+        seed_everything(SEED)
+        logger.info(f"All random number generators seeded with: {SEED}")
+    
     device = get_device()
     logger.info(f"Using device: {device}")
 
@@ -83,10 +95,33 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         seed_val=SEED_VAL,
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, num_workers=0, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, num_workers=0, shuffle=True)
+    train_generator = (
+        torch.Generator().manual_seed(SEED) if FIX_ALL_SEEDS else None
+    )
+    val_generator = (
+        torch.Generator().manual_seed(SEED + 1) if FIX_ALL_SEEDS else None
+    )
+    worker_init_fn = seed_worker if FIX_ALL_SEEDS else None
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=0,
+        shuffle=True,
+        generator=train_generator,
+        worker_init_fn=worker_init_fn,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=0,
+        shuffle=True,
+        generator=val_generator,
+        worker_init_fn=worker_init_fn,
+    )
 
     aim_run["hparams"] = {
+        "fix_all_seeds": FIX_ALL_SEEDS,
+        "seed": SEED if FIX_ALL_SEEDS else None,
         "batch_size": BATCH_SIZE,
         "learning_rate": LR,
         "learning_rate_min": LR_MIN,

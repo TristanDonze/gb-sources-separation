@@ -1,5 +1,34 @@
 import os
+import random
+
+import numpy as np
 import torch
+from torch.utils.data import get_worker_info
+
+
+def seed_everything(seed: int) -> None:
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def seed_worker(worker_id: int) -> None:
+    del worker_id
+    worker_seed = torch.initial_seed() % 2**32
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+
+    worker_info = get_worker_info()
+    if worker_info is not None and hasattr(worker_info.dataset, "rng"):
+        worker_info.dataset.rng = np.random.default_rng(worker_seed)
+
 
 def get_device():
     free_memory = []
