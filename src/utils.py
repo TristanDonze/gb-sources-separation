@@ -47,7 +47,11 @@ def save_checkpoint(
     optimizer,
     scheduler,
     train_losses,
+    train_source_losses,
+    train_residual_losses,
     val_losses,
+    val_source_losses,
+    val_residual_losses,
     best_val_loss,
     best_val_loss_epoch,
     epoch,
@@ -60,7 +64,11 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
         "train_losses": train_losses,
+        "train_source_losses": train_source_losses,
+        "train_residual_losses": train_residual_losses,
         "val_losses": val_losses,
+        "val_source_losses": val_source_losses,
+        "val_residual_losses": val_residual_losses,
         "best_val_loss": best_val_loss,
         "best_val_loss_epoch": best_val_loss_epoch,
         "min_lr_reached_epoch": min_lr_reached_epoch,
@@ -74,14 +82,22 @@ def load_checkpoint(model, optimizer, scheduler, path):
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     train_losses = checkpoint["train_losses"]
+    train_source_losses = checkpoint["train_source_losses"]
+    train_residual_losses = checkpoint["train_residual_losses"]
     val_losses = checkpoint["val_losses"]
+    val_source_losses = checkpoint["val_source_losses"]
+    val_residual_losses = checkpoint["val_residual_losses"]
     best_val_loss = checkpoint["best_val_loss"]
     best_val_loss_epoch = checkpoint["best_val_loss_epoch"]
     epoch = checkpoint["epoch"]
     min_lr_reached_epoch = checkpoint.get("min_lr_reached_epoch")
     return (
         train_losses,
+        train_source_losses,
+        train_residual_losses,
         val_losses,
+        val_source_losses,
+        val_residual_losses,
         best_val_loss,
         best_val_loss_epoch,
         epoch,

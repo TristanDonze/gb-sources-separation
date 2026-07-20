@@ -142,7 +142,11 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     }
 
     train_losses = []
+    train_source_losses = []
+    train_residual_losses = []
     val_losses = []
+    val_source_losses = []
+    val_residual_losses = []
     best_val_loss = float("inf")
     best_val_loss_epoch = 0
     min_lr_reached_epoch = None
@@ -150,7 +154,11 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     if load_checkpoint_path is not None:
         (
             train_losses,
+            train_source_losses,
+            train_residual_losses,
             val_losses,
+            val_source_losses,
+            val_residual_losses,
             best_val_loss,
             best_val_loss_epoch,
             last_completed_epoch,
@@ -162,7 +170,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         start_epoch = 0
 
     for epoch in range(start_epoch, NB_EPOCHS):
-        train_loss = train_one_epoch(
+        train_loss, train_source_loss, train_residual_loss = train_one_epoch(
             model,
             train_loader,
             optimizer,
@@ -170,7 +178,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             device,
             timing=ENABLE_TIMING,
         )
-        val_loss = evaluate(
+        val_loss, val_source_loss, val_residual_loss = evaluate(
             model,
             val_loader,
             val_criterion,
@@ -180,7 +188,12 @@ def train(checkpoint_dir, load_checkpoint_path=None):
 
 
         train_losses.append(train_loss)
+        train_source_losses.append(train_source_loss)
+        train_residual_losses.append(train_residual_loss)
+        
         val_losses.append(val_loss)
+        val_source_losses.append(val_source_loss)
+        val_residual_losses.append(val_residual_loss)
 
         scheduler.step(val_loss)
 
@@ -194,7 +207,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             logger.info(f"Minimum LR {LR_MIN:.2e} reached at epoch {aim_epoch}.")
 
         track_metric(
-            "Training Flow Matching Loss",
+            "Training Total Loss",
             train_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -202,8 +215,40 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
-            "Validation Reconstruction Loss",
+            "Training Source Loss",
+            train_source_loss,
+            step=aim_epoch,
+            epoch=aim_epoch,
+            split="train",
+            granularity="epoch",
+        )
+        track_metric(
+            "Training Residual Loss",
+            train_residual_loss,
+            step=aim_epoch,
+            epoch=aim_epoch,
+            split="train",
+            granularity="epoch",
+        )
+        track_metric(
+            "Validation Total Loss",
             val_loss,
+            step=aim_epoch,
+            epoch=aim_epoch,
+            split="val",
+            granularity="epoch",
+        )
+        track_metric(
+            "Validation Source Loss",
+            val_source_loss,
+            step=aim_epoch,
+            epoch=aim_epoch,
+            split="val",
+            granularity="epoch",
+        )
+        track_metric(
+            "Validation Residual Loss",
+            val_residual_loss,
             step=aim_epoch,
             epoch=aim_epoch,
             split="val",
@@ -219,14 +264,14 @@ def train(checkpoint_dir, load_checkpoint_path=None):
 
         logger.info(
             f"Epoch {epoch+1}/{NB_EPOCHS} :\n"
-            f" - Train Loss: {train_loss:.4f}\n" 
-            f" - Validation Loss: {val_loss:.4f}\n"
+            f" - Train Loss: {train_loss:.4f} (Source: {train_source_loss:.4f}, Residual: {train_residual_loss:.4f})\n"
+            f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
         )
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_val_loss_epoch = epoch + 1
             track_metric(
-                "Best Validation Reconstruction Loss",
+                "Best Validation Total Loss",
                 best_val_loss,
                 step=aim_epoch,
                 epoch=aim_epoch,
@@ -238,7 +283,11 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 optimizer,
                 scheduler,
                 train_losses,
+                train_source_losses,
+                train_residual_losses,
                 val_losses,
+                val_source_losses,
+                val_residual_losses,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,
@@ -250,7 +299,11 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 optimizer,
                 scheduler,
                 train_losses,
+                train_source_losses,
+                train_residual_losses,
                 val_losses,
+                val_source_losses,
+                val_residual_losses,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,

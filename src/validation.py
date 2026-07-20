@@ -29,6 +29,8 @@ def evaluate(model, dataloader, criterion, device, timing=True):
     model.eval()
 
     total_loss = 0.0
+    total_source_loss = 0.0
+    total_residual_loss = 0.0
     total_samples = 0
 
     dt = 1.0 / NB_OF_STEPS
@@ -66,12 +68,16 @@ def evaluate(model, dataloader, criterion, device, timing=True):
             X_hat = X_t
 
             with timer.measure("criterion"):
-                loss = criterion(X_hat, X_1)
+                source_loss, residual_loss, loss = criterion(X_hat, X_1)
 
             total_loss += loss.item() * B
+            total_source_loss += source_loss.item() * B
+            total_residual_loss += residual_loss.item() * B
             total_samples += B
 
     average_loss = total_loss / total_samples
+    average_source_loss = total_source_loss / total_samples
+    average_residual_loss = total_residual_loss / total_samples
     timer.log(
         renamed_averages={"model_forward": "model_forward_per_call"},
         extra_averages={
@@ -79,4 +85,4 @@ def evaluate(model, dataloader, criterion, device, timing=True):
         },
     )
 
-    return average_loss
+    return average_loss, average_source_loss, average_residual_loss
