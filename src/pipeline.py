@@ -207,7 +207,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             logger.info(f"Minimum LR {LR_MIN:.2e} reached at epoch {aim_epoch}.")
 
         track_metric(
-            "Training Total Loss",
+            "Training Flow Matching Loss",
             train_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -231,7 +231,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
-            "Validation Total Loss",
+            "Validation Reconstruction Loss",
             val_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -239,7 +239,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
-            "Validation Source Loss",
+            "Validation Reconstruction Source Loss",
             val_source_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -247,7 +247,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
-            "Validation Residual Loss",
+            "Validation Reconstruction Residual Loss",
             val_residual_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -271,7 +271,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             best_val_loss = val_loss
             best_val_loss_epoch = epoch + 1
             track_metric(
-                "Best Validation Total Loss",
+                "Best Validation Reconstruction Loss",
                 best_val_loss,
                 step=aim_epoch,
                 epoch=aim_epoch,

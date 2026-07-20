@@ -74,7 +74,7 @@ class FlowMatchingPIT_Loss(nn.Module):
 
         loss = source_loss + self.residual_weight * residual_loss
 
-        return _reduce(source_loss, reduction), _reduce(residual_loss, reduction), _reduce(loss, reduction)
+        return _reduce(loss, reduction), _reduce(source_loss, reduction), _reduce(residual_loss, reduction)
 
 
 class ReconstructionPIT_Loss(nn.Module):
@@ -113,7 +113,7 @@ class ReconstructionPIT_Loss(nn.Module):
 
         loss = source_loss + self.residual_weight * residual_loss
 
-        return _reduce(source_loss, reduction), _reduce(residual_loss, reduction), _reduce(loss, reduction)
+        return _reduce(loss, reduction), _reduce(source_loss, reduction), _reduce(residual_loss, reduction)
 
 
 class FlowMatchingPIT_MSELoss(FlowMatchingPIT_Loss):

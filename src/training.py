@@ -50,7 +50,7 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
             v = model(X_t, t, mixture, K)
 
         with timer.measure("loss_backward_step"):
-            source_loss, residual_loss, loss = criterion(v, X_0, X_1)
+            loss, source_loss, residual_loss = criterion(v, X_0, X_1)
 
             optimizer.zero_grad()
             loss.backward()

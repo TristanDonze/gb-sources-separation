@@ -68,7 +68,7 @@ def evaluate(model, dataloader, criterion, device, timing=True):
             X_hat = X_t
 
             with timer.measure("criterion"):
-                source_loss, residual_loss, loss = criterion(X_hat, X_1)
+                loss, source_loss, residual_loss = criterion(X_hat, X_1)
 
             total_loss += loss.item() * B
             total_source_loss += source_loss.item() * B
