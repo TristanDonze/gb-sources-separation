@@ -61,7 +61,6 @@ class TimeEmbedding(nn.Module):
         t_emb = self.linear(t)  # (B, dim_model)
         return t_emb
 
-
 class FrequencySelfAttention(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
         super().__init__()
@@ -162,36 +161,6 @@ class CrossAttentionToMixture(nn.Module):
         attn_out = attn_out.reshape(B, L, F, D)
 
         return x + self.dropout(attn_out)
-
-    # def forward(self, x, y):
-    #     # x: (B, L, F, D)
-    #     # y: (B, F, D)
-    #     B, L, F, D = x.shape
-    #     By, Fy, Dy = y.shape
-
-    #     assert By == B
-    #     assert Fy == F
-    #     assert D == self.dim_model
-    #     assert Dy == self.dim_model
-
-    #     x_norm = self.x_norm(x)
-    #     y_norm = self.y_norm(y)
-
-    #     x_flat = x_norm.reshape(B * L, F, D)
-
-    #     y_flat = y_norm[:, None, :, :].expand(B, L, F, D)
-    #     y_flat = y_flat.reshape(B * L, F, D)
-
-    #     attn_out, _ = self.attention(
-    #         x_flat,
-    #         y_flat,
-    #         y_flat,
-    #         need_weights=False,
-    #     )
-
-    #     attn_out = attn_out.reshape(B, L, F, D)
-
-    #     return x + self.dropout(attn_out)
 
 class FeedForward(nn.Module):
     def __init__(
