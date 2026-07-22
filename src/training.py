@@ -30,13 +30,14 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
     total_residual_loss = 0.0
     timer = StageTimer(device, logger, prefix="Training", enabled=timing)
 
-    for mixture, X_1, K in timer.iter_batches(dataloader):
+    for mixture, X_1, K, snrs in timer.iter_batches(dataloader):
         B, L, _, _ = X_1.shape
 
         with timer.measure("to_device"):
             mixture = mixture.to(device)
             X_1 = X_1.to(device)
             K = K.to(device)
+            snrs = snrs.to(device)
 
         with timer.measure("prepare"):
             X_0 = build_initial_state(mixture, X_1)
@@ -50,7 +51,7 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
             v = model(X_t, t, mixture, K)
 
         with timer.measure("loss_backward_step"):
-            loss, source_loss, residual_loss = criterion(v, X_0, X_1)
+            loss, source_loss, residual_loss = criterion(v, X_0, X_1, snrs)
 
             optimizer.zero_grad()
             loss.backward()
@@ -94,6 +95,7 @@ if __name__ == "__main__":
         deterministic_val=True,
         # target_energy_val=22000.0,
         return_params=False,
+        returns_snr=True,
         split_seed=42,
         split_strategy="snr",
         snr_bin_width=1.0,

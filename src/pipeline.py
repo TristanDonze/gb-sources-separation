@@ -7,8 +7,10 @@ from src.dataset import create_train_val_datasets
 from src.losses import (
     FlowMatchingPIT_MSELoss,
     FlowMatchingPIT_RMSELoss,
+    FlowMatchingPIT_SNRWeightedMSELoss,
     ReconstructionPIT_MSELoss,
-    ReconstructionPIT_RMSELoss
+    ReconstructionPIT_RMSELoss,
+    ReconstructionPIT_SNRWeightedMSELoss,
 )
 from src.training import train_one_epoch
 from src.validation import evaluate
@@ -38,6 +40,7 @@ from config import (
 
     MAX_K,
     CONSTANT_K,
+    TRAIN_ALPHA_SNR,
     BATCH_SIZE,
     WEIGHT_DECAY,
     NB_EPOCHS,
@@ -59,9 +62,19 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     device = get_device()
     logger.info(f"Using device: {device}")
 
-    train_criterion = FlowMatchingPIT_MSELoss()
-    val_criterion = ReconstructionPIT_MSELoss()
-
+    # train_criterion = FlowMatchingPIT_MSELoss()
+    # val_criterion = ReconstructionPIT_MSELoss()
+    train_criterion = FlowMatchingPIT_SNRWeightedMSELoss(alpha=TRAIN_ALPHA_SNR)
+    val_criterions = {
+        "Classic PIT MSE Reconstruction Loss": ReconstructionPIT_MSELoss(),
+        "SNR-Weighted PIT MSE Reconstruction Loss with alpha=1.0": (
+            ReconstructionPIT_SNRWeightedMSELoss(alpha=1.0)
+        ),
+        "SNR-Weighted PIT MSE Reconstruction Loss with alpha=2.0": (
+            ReconstructionPIT_SNRWeightedMSELoss(alpha=2.0)
+        ),
+    }
+    primary_criterion = "Classic PIT MSE Reconstruction Loss"
 
     model = FlowSeparator(max_k=MAX_K).to(device)
     logger.info(f"Total number of parameters: {sum(p.numel() for p in model.parameters())}")
@@ -89,6 +102,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         noise_val=True,
         deterministic_train=False,
         deterministic_val=True,
+        return_params=False,
+        returns_snr=True,
         split_seed=SPLIT_SEED,
         split_strategy=SPLIT_STRATEGY,
         seed_train=SEED_TRAIN,
@@ -114,7 +129,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         val_dataset,
         batch_size=BATCH_SIZE,
         num_workers=0,
-        shuffle=True,
+        shuffle=False,
         generator=val_generator,
         worker_init_fn=worker_init_fn,
     )
@@ -130,6 +145,10 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "scheduler_patience": PATIENCE,
         "weight_decay": WEIGHT_DECAY,
         "epochs": NB_EPOCHS,
+        "train_loss": train_criterion.__class__.__name__,
+        "train_alpha_snr": TRAIN_ALPHA_SNR,
+        "primary_validation_criterion": primary_criterion,
+        "validation_criteria": list(val_criterions),
     }
     aim_run["dataset"] = {
         "dataset_path": str(dataset_path),
@@ -144,9 +163,14 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     train_losses = []
     train_source_losses = []
     train_residual_losses = []
-    val_losses = []
-    val_source_losses = []
-    val_residual_losses = []
+    val_losses = {
+        criterion_desc: {
+            "losses": [],
+            "source_losses": [],
+            "residual_losses": [],
+        }
+        for criterion_desc in val_criterions.keys()
+    }
     best_val_loss = float("inf")
     best_val_loss_epoch = 0
     min_lr_reached_epoch = None
@@ -157,13 +181,16 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             train_source_losses,
             train_residual_losses,
             val_losses,
-            val_source_losses,
-            val_residual_losses,
             best_val_loss,
             best_val_loss_epoch,
             last_completed_epoch,
             min_lr_reached_epoch,
         ) = load_checkpoint(model, optimizer, scheduler, load_checkpoint_path)
+        if set(val_losses) != set(val_criterions):
+            raise ValueError(
+                "Checkpoint validation criteria do not match the current "
+                "validation criteria."
+            )
         start_epoch = last_completed_epoch + 1
         logger.info(f"Loaded checkpoint from {load_checkpoint_path}, starting from epoch {start_epoch+1}")
     else:
@@ -178,24 +205,28 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             device,
             timing=ENABLE_TIMING,
         )
-        val_loss, val_source_loss, val_residual_loss = evaluate(
-            model,
-            val_loader,
-            val_criterion,
-            device,
-            timing=ENABLE_TIMING,
-        )
-
-
         train_losses.append(train_loss)
         train_source_losses.append(train_source_loss)
         train_residual_losses.append(train_residual_loss)
-        
-        val_losses.append(val_loss)
-        val_source_losses.append(val_source_loss)
-        val_residual_losses.append(val_residual_loss)
 
-        scheduler.step(val_loss)
+        val_metrics = evaluate(
+            model,
+            val_loader,
+            val_criterions,
+            device,
+            timing=ENABLE_TIMING,
+        )
+        for criterion_desc, metrics in val_metrics.items():
+            val_losses[criterion_desc]["losses"].append(metrics["loss"])
+            val_losses[criterion_desc]["source_losses"].append(
+                metrics["source_loss"]
+            )
+            val_losses[criterion_desc]["residual_losses"].append(
+                metrics["residual_loss"]
+            )
+
+        primary_val_loss = val_losses[primary_criterion]["source_losses"][-1]
+        scheduler.step(primary_val_loss)
 
         aim_epoch = epoch + 1
         lr_at_min = all(
@@ -207,7 +238,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             logger.info(f"Minimum LR {LR_MIN:.2e} reached at epoch {aim_epoch}.")
 
         track_metric(
-            "Training Flow Matching Loss",
+            "Training SNR-Weighted Flow Matching Loss",
             train_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -215,7 +246,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
-            "Training Source Loss",
+            "Training SNR-Weighted Source Loss",
             train_source_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -230,30 +261,31 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             split="train",
             granularity="epoch",
         )
-        track_metric(
-            "Validation Reconstruction Loss",
-            val_loss,
-            step=aim_epoch,
-            epoch=aim_epoch,
-            split="val",
-            granularity="epoch",
-        )
-        track_metric(
-            "Validation Reconstruction Source Loss",
-            val_source_loss,
-            step=aim_epoch,
-            epoch=aim_epoch,
-            split="val",
-            granularity="epoch",
-        )
-        track_metric(
-            "Validation Reconstruction Residual Loss",
-            val_residual_loss,
-            step=aim_epoch,
-            epoch=aim_epoch,
-            split="val",
-            granularity="epoch",
-        )
+        for criterion_desc, criterion_metrics in val_losses.items():
+            track_metric(
+                f"{criterion_desc} - Validation Reconstruction Loss",
+                criterion_metrics["losses"][-1],
+                step=aim_epoch,
+                epoch=aim_epoch,
+                split="val",
+                granularity="epoch",
+            )
+            track_metric(
+                f"{criterion_desc} - Validation Source Loss",
+                criterion_metrics["source_losses"][-1],
+                step=aim_epoch,
+                epoch=aim_epoch,
+                split="val",
+                granularity="epoch",
+            )
+            track_metric(
+                f"{criterion_desc} - Validation Residual Loss",
+                criterion_metrics["residual_losses"][-1],
+                step=aim_epoch,
+                epoch=aim_epoch,
+                split="val",
+                granularity="epoch",
+            )
         track_metric(
             "learning_rate",
             optimizer.param_groups[0]["lr"],
@@ -262,17 +294,23 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
 
+        validation_log = "\n".join(
+            f" - {criterion_desc}: {metrics['loss']:.4f} "
+            f"(Source: {metrics['source_loss']:.4f}, "
+            f"Residual: {metrics['residual_loss']:.4f})"
+            for criterion_desc, metrics in val_metrics.items()
+        )
         logger.info(
             f"Epoch {epoch+1}/{NB_EPOCHS} :\n"
             f" - Train Loss: {train_loss:.4f} (Source: {train_source_loss:.4f}, Residual: {train_residual_loss:.4f})\n"
-            f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
+            f"{validation_log}\n"
         )
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if primary_val_loss < best_val_loss:
+            best_val_loss = primary_val_loss
             best_val_loss_epoch = epoch + 1
             track_metric(
-                "Best Validation Reconstruction Loss",
-                best_val_loss,
+                "Best Validation Reconstruction Source Loss",
+                primary_val_loss,
                 step=aim_epoch,
                 epoch=aim_epoch,
                 split="val",
@@ -286,8 +324,6 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 train_source_losses,
                 train_residual_losses,
                 val_losses,
-                val_source_losses,
-                val_residual_losses,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,
@@ -302,8 +338,6 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 train_source_losses,
                 train_residual_losses,
                 val_losses,
-                val_source_losses,
-                val_residual_losses,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,

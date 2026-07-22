@@ -25,12 +25,17 @@ def build_initial_state(mixture, X_1, generator=None):
     return S_bar + Z
 
 
-def evaluate(model, dataloader, criterion, device, timing=True):
+def evaluate(model, dataloader, criterions, device, timing=True):
     model.eval()
 
-    total_loss = 0.0
-    total_source_loss = 0.0
-    total_residual_loss = 0.0
+    totals = {
+        name: {
+            "source_numerator": 0.0,
+            "source_denominator": 0.0,
+            "residual_loss": 0.0,
+        }
+        for name in criterions
+    }
     total_samples = 0
 
     dt = 1.0 / NB_OF_STEPS
@@ -40,11 +45,12 @@ def evaluate(model, dataloader, criterion, device, timing=True):
     timer = StageTimer(device, logger, prefix="Validation", enabled=timing)
 
     with torch.no_grad():
-        for mixture, X_1, K in timer.iter_batches(dataloader):
+        for mixture, X_1, K, snrs in timer.iter_batches(dataloader):
             with timer.measure("to_device"):
                 mixture = mixture.to(device)
                 X_1 = X_1.to(device)
                 K = K.to(device)
+                snrs = snrs.to(device)
 
             B = X_1.shape[0]
 
@@ -68,16 +74,57 @@ def evaluate(model, dataloader, criterion, device, timing=True):
             X_hat = X_t
 
             with timer.measure("criterion"):
-                loss, source_loss, residual_loss = criterion(X_hat, X_1)
+                reconstruction_diff = (
+                    X_hat[:, :-1, None] - X_1[:, None, :-1]
+                )
+                assignment_cost = reconstruction_diff.pow(2).mean(dim=(-1, -2))
 
-            total_loss += loss.item() * B
-            total_source_loss += source_loss.item() * B
-            total_residual_loss += residual_loss.item() * B
+                source_count = B * snrs.shape[1]
+                for name, criterion in criterions.items():
+                    _, source_loss, residual_loss = criterion(
+                        X_hat,
+                        X_1,
+                        snrs,
+                        assignment_cost=assignment_cost,
+                    )
+
+                    if hasattr(criterion, "alpha"):
+                        weight_mean = (
+                            snrs.clamp_min(1e-8)
+                            .pow(-criterion.alpha)
+                            .mean()
+                            .item()
+                        )
+                    else:
+                        weight_mean = 1.0
+
+                    totals[name]["source_numerator"] += (
+                        source_loss.item() * weight_mean * source_count
+                    )
+                    totals[name]["source_denominator"] += (
+                        weight_mean * source_count
+                    )
+                    totals[name]["residual_loss"] += residual_loss.item() * B
+
             total_samples += B
 
-    average_loss = total_loss / total_samples
-    average_source_loss = total_source_loss / total_samples
-    average_residual_loss = total_residual_loss / total_samples
+    metrics = {}
+    for name, criterion in criterions.items():
+        average_source_loss = (
+            totals[name]["source_numerator"]
+            / totals[name]["source_denominator"]
+        )
+        average_residual_loss = totals[name]["residual_loss"] / total_samples
+        average_loss = (
+            average_source_loss
+            + criterion.residual_weight * average_residual_loss
+        )
+        metrics[name] = {
+            "loss": average_loss,
+            "source_loss": average_source_loss,
+            "residual_loss": average_residual_loss,
+        }
+
     timer.log(
         renamed_averages={"model_forward": "model_forward_per_call"},
         extra_averages={
@@ -85,4 +132,4 @@ def evaluate(model, dataloader, criterion, device, timing=True):
         },
     )
 
-    return average_loss, average_source_loss, average_residual_loss
+    return metrics

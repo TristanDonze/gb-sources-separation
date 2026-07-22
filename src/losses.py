@@ -12,14 +12,18 @@ def _reduce(loss, reduction="mean"):
     else:
         raise ValueError(f"Unknown reduction: {reduction}")
 
-def hungarian_loss(cost):
+def hungarian_loss(cost, assignment_cost=None):
     B = cost.shape[0]
-    cost_cpu = cost.detach().cpu().float().numpy()
+    if assignment_cost is None:
+        assignment_cost = cost
+
+    assert assignment_cost.shape == cost.shape
+    assignment_cost_cpu = assignment_cost.detach().cpu().float().numpy()
 
     losses = []
 
     for b in range(B):
-        row_ind, col_ind = linear_sum_assignment(cost_cpu[b])
+        row_ind, col_ind = linear_sum_assignment(assignment_cost_cpu[b])
 
         row_ind = torch.as_tensor(row_ind, device=cost.device)
         col_ind = torch.as_tensor(col_ind, device=cost.device)
@@ -34,13 +38,13 @@ class FlowMatchingPIT_Loss(nn.Module):
         super().__init__()
         self.residual_weight = residual_weight
 
-    def pairwise_cost(self, diff):
+    def pairwise_cost(self, diff, snrs=None):
         raise NotImplementedError
 
     def scalar_loss(self, diff):
         raise NotImplementedError
 
-    def forward(self, v_pred, X_0, X_1, reduction="mean"):
+    def forward(self, v_pred, X_0, X_1, snrs=None, reduction="mean"):
         # v_pred: (B, K+1, C, F)
         # X_0:    (B, K+1, C, F)
         # X_1:    (B, K+1, C, F)
@@ -63,8 +67,7 @@ class FlowMatchingPIT_Loss(nn.Module):
         diff = pred_sources[:, :, None] - target_velocity
         # (B, K_pred, K_true, C, F)
 
-        cost = self.pairwise_cost(diff)
-        # (B, K, K)
+        cost = self.pairwise_cost(diff, snrs) # (B, K, K)
 
         source_loss = hungarian_loss(cost) # (B,)
 
@@ -82,13 +85,20 @@ class ReconstructionPIT_Loss(nn.Module):
         super().__init__()
         self.residual_weight = residual_weight
 
-    def pairwise_cost(self, diff):
+    def pairwise_cost(self, diff, snrs=None):
         raise NotImplementedError
 
     def scalar_loss(self, diff):
         raise NotImplementedError
 
-    def forward(self, predictions, targets, reduction="mean"):
+    def forward(
+        self,
+        predictions,
+        targets,
+        snrs=None,
+        reduction="mean",
+        assignment_cost=None,
+    ):
         # predictions: (B, K+1, C, F)
         # targets:     (B, K+1, C, F)
 
@@ -103,10 +113,9 @@ class ReconstructionPIT_Loss(nn.Module):
         diff = pred_sources[:, :, None] - true_sources[:, None]
         # (B, K_pred, K_true, C, F)
 
-        cost = self.pairwise_cost(diff)
-        # (B, K, K)
+        cost = self.pairwise_cost(diff, snrs) # (B, K, K)
 
-        source_loss = hungarian_loss(cost)  # (B,)
+        source_loss = hungarian_loss(cost, assignment_cost=assignment_cost)  # (B,)
 
         residual_diff = pred_residual - true_residual
         residual_loss = self.scalar_loss(residual_diff) # (B, )
@@ -117,8 +126,34 @@ class ReconstructionPIT_Loss(nn.Module):
 
 
 class FlowMatchingPIT_MSELoss(FlowMatchingPIT_Loss):
-    def pairwise_cost(self, diff):
+    def pairwise_cost(self, diff, snrs=None):
         return diff.pow(2).mean(dim=(-1, -2))
+
+    def scalar_loss(self, diff):
+        return diff.pow(2).mean(dim=(-1, -2))
+
+
+class FlowMatchingPIT_SNRWeightedMSELoss(FlowMatchingPIT_Loss):
+    def __init__(self, residual_weight: float = 1.0, alpha: float = 1.0):
+        super().__init__(residual_weight=residual_weight)
+        self.alpha = alpha
+
+    def pairwise_cost(self, diff, snrs):
+        raw_cost = diff.pow(2).mean(dim=(-1, -2))
+
+        if snrs is None:
+            raise ValueError("snrs are required for SNR-weighted losses")
+        if snrs.shape != (raw_cost.shape[0], raw_cost.shape[2]):
+            raise ValueError(
+                f"Expected snrs shape {(raw_cost.shape[0], raw_cost.shape[2])}, "
+                f"got {tuple(snrs.shape)}"
+            )
+
+        weights = snrs.clamp_min(1e-8).pow(-self.alpha)
+        weights = weights / weights.mean().detach()
+
+        weighted_cost = raw_cost * weights[:, None, :]
+        return weighted_cost
 
     def scalar_loss(self, diff):
         return diff.pow(2).mean(dim=(-1, -2))
@@ -129,7 +164,7 @@ class FlowMatchingPIT_RMSELoss(FlowMatchingPIT_Loss):
         super().__init__(residual_weight=residual_weight)
         self.eps = eps
 
-    def pairwise_cost(self, diff):
+    def pairwise_cost(self, diff, snrs=None):
         return torch.sqrt(diff.pow(2).mean(dim=(-1, -2)) + self.eps)
 
     def scalar_loss(self, diff):
@@ -137,8 +172,34 @@ class FlowMatchingPIT_RMSELoss(FlowMatchingPIT_Loss):
 
 
 class ReconstructionPIT_MSELoss(ReconstructionPIT_Loss):
-    def pairwise_cost(self, diff):
+    def pairwise_cost(self, diff, snrs=None):
         return diff.pow(2).mean(dim=(-1, -2))
+
+    def scalar_loss(self, diff):
+        return diff.pow(2).mean(dim=(-1, -2))
+
+
+class ReconstructionPIT_SNRWeightedMSELoss(ReconstructionPIT_Loss):
+    def __init__(self, residual_weight: float = 1.0, alpha: float = 1.0):
+        super().__init__(residual_weight=residual_weight)
+        self.alpha = alpha
+
+    def pairwise_cost(self, diff, snrs):
+        raw_cost = diff.pow(2).mean(dim=(-1, -2))
+
+        if snrs is None:
+            raise ValueError("snrs are required for SNR-weighted losses")
+        if snrs.shape != (raw_cost.shape[0], raw_cost.shape[2]):
+            raise ValueError(
+                f"Expected snrs shape {(raw_cost.shape[0], raw_cost.shape[2])}, "
+                f"got {tuple(snrs.shape)}"
+            )
+
+        weights = snrs.clamp_min(1e-8).pow(-self.alpha)
+        weights = weights / weights.mean().detach()
+
+        weighted_cost = raw_cost * weights[:, None, :]
+        return weighted_cost
 
     def scalar_loss(self, diff):
         return diff.pow(2).mean(dim=(-1, -2))
@@ -149,7 +210,7 @@ class ReconstructionPIT_RMSELoss(ReconstructionPIT_Loss):
         super().__init__(residual_weight=residual_weight)
         self.eps = eps
 
-    def pairwise_cost(self, diff):
+    def pairwise_cost(self, diff, snrs=None):
         return torch.sqrt(diff.pow(2).mean(dim=(-1, -2)) + self.eps)
 
     def scalar_loss(self, diff):
