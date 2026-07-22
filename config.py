@@ -11,7 +11,7 @@ huge_dataset_path = Path("/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_dataset
 # Medium Config
 dataset_path = medium_dataset_path
 TRAIN_SIZE = 0.8
-MAX_SAMPLES_TRAIN = 100_000
+MAX_SAMPLES_TRAIN = 400_000
 MAX_SAMPLES_VAL = 10_000
 
 # Huge Config
@@ -23,6 +23,7 @@ MAX_SAMPLES_VAL = 10_000
 SPLIT_STRATEGY = "snr" # "random" or "snr"
 FIX_ALL_SEEDS = True
 SEED = 42
+
 SEED_TRAIN = 42
 SEED_VAL = 0
 SPLIT_SEED = 2027
@@ -34,14 +35,14 @@ CONSTANT_K = 2
 BATCH_SIZE = 480
 WEIGHT_DECAY = 1e-4
 NB_EPOCHS = 30
-ENABLE_TIMING = True  # Synchronizes CUDA stages; disable for maximum throughput.
+ENABLE_TIMING = False  # Synchronizes CUDA stages; disable for maximum throughput.
 
 # Scheduler : 
 
 LR = 1e-3
 LR_MIN = 1e-6
 FACTOR = 0.5
-PATIENCE = 8
+PATIENCE = 5
 
 # Validation Hyperparameters
 
