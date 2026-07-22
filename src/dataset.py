@@ -19,6 +19,7 @@ class GalacticBinariesDataset(Dataset):
         noise: bool = True,
         max_samples: int | None = None,
         return_params: bool = False,
+        returns_snr: bool = False,
         deterministic: bool = False,
         seed: int | None = None,
     ):
@@ -41,6 +42,7 @@ class GalacticBinariesDataset(Dataset):
         self.noise = noise
         self.max_samples = max_samples
         self.return_params = return_params
+        self.returns_snr = returns_snr
         self.deterministic = deterministic
         self.seed = seed
         self.rng = np.random.default_rng(seed)
@@ -53,6 +55,9 @@ class GalacticBinariesDataset(Dataset):
                 f"max_K={self.max_K} cannot be greater than "
                 f"selected waveforms={self.nb_selected_waveforms}"
             )
+
+        if self.returns_snr is True and self.return_params is True:
+            raise ValueError("returns_snr and return_params cannot both be True. Choose one.")
 
         if self.deterministic:
             logger.info("Building fixed mixtures for deterministic sampling...")
@@ -200,6 +205,10 @@ class GalacticBinariesDataset(Dataset):
             [sources, residual[None, ...]], axis=0
         ).astype(np.float32, copy=False)
 
+        if self.returns_snr:
+            snrs = np.asarray(self.snr[waveform_indices], dtype=np.float32)
+            return mixture, X_1, K, snrs
+
         if self.return_params:
             params = self._build_padded_params(waveform_indices, K)
             return mixture, X_1, K, params 
@@ -221,6 +230,7 @@ class TrainDataset(GalacticBinariesDataset):
         max_samples: int | None = None,
         indices: np.ndarray | None = None,
         return_params: bool = False,
+        returns_snr: bool = False,
         deterministic: bool = False,
         seed: int | None = None,
     ):
@@ -233,6 +243,7 @@ class TrainDataset(GalacticBinariesDataset):
             max_samples=max_samples,
             indices=indices,
             return_params=return_params,
+            returns_snr=returns_snr,
             deterministic=deterministic,
             seed=seed,
         )
@@ -264,6 +275,7 @@ class ValidationDataset(GalacticBinariesDataset):
         max_samples: int | None = None,
         indices: np.ndarray | None = None,
         return_params: bool = False,
+        returns_snr: bool = False,
         deterministic: bool = True,
         seed: int | None = None,
     ):
@@ -276,6 +288,7 @@ class ValidationDataset(GalacticBinariesDataset):
             max_samples=max_samples,
             indices=indices,
             return_params=return_params,
+            returns_snr=returns_snr,
             deterministic=deterministic,
             seed=seed,
         )
@@ -377,6 +390,7 @@ def create_train_val_datasets(
     deterministic_val : bool = True,
     # target_energy_val : float = 22000.0,
     return_params : bool = False,
+    returns_snr : bool = False,
     split_seed : int = 42,
     split_strategy : str = "snr",
     snr_bin_width : float = 1.0,
@@ -425,6 +439,7 @@ def create_train_val_datasets(
         # random_global_scale=random_global_scale_train,
         deterministic=deterministic_train,
         return_params=return_params,
+        returns_snr=returns_snr,
         seed=seed_train,
     ) if len(train_indices) > 0 else None
 
@@ -438,6 +453,7 @@ def create_train_val_datasets(
         noise=noise_val,
         deterministic=deterministic_val,
         return_params=return_params,
+        returns_snr=returns_snr,
         seed=seed_val,
     )
 
@@ -474,6 +490,7 @@ if __name__ == "__main__":
         deterministic_val=True,
         # target_energy_val=22000.0,
         return_params=False,
+        returns_snr=True,
         split_seed=42,
         split_strategy="snr",
         snr_bin_width=1.0,
@@ -482,17 +499,23 @@ if __name__ == "__main__":
     )
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-    for batch_idx, (mixture, X_1, K) in enumerate(train_loader):
+    for batch_idx, (mixture, X_1, K, snrs) in enumerate(train_loader):
         print(f"Batch {batch_idx}:")
         print(f"  mixture shape: {mixture.shape}")
         print(f"  X_1 shape: {X_1.shape}")
         print(f"  K shape: {K.shape}")
         print(f"  K values: {K}")
+        print(f"  snrs shape: {snrs.shape}")
+        print(f"  SNR values: {snrs}")
 
         reconstructed_mixture = X_1.sum(dim=1)
         error = (reconstructed_mixture - mixture).abs().max()
 
         print(f"max reconstruction error: {error}")
-
+        for i in range(mixture.shape[0]):
+            for k in range(K[i]):
+                source_energy = (X_1[i, k] ** 2).sum().item()
+                estimated_snr_based_on_energy = np.sqrt(source_energy)
+                print(f"Batch {batch_idx}, Sample {i}, Source {k}: Energy = {source_energy:.6f}, Estimated SNR = {estimated_snr_based_on_energy:.6f}, Actual SNR = {snrs[i, k]:.6f}")
         if batch_idx >= 2:
             break
