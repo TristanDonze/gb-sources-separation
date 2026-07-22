@@ -121,7 +121,7 @@ class FrequencySelfAttention(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
         super().__init__()
         self.dim_model = dim_model
-        self.norm = nn.LayerNorm(dim_model)
+        self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.attention = nn.MultiheadAttention(
             dim_model,
             n_heads,
@@ -152,7 +152,7 @@ class SlotSelfAttention(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
         super().__init__()
         self.dim_model = dim_model
-        self.norm = nn.LayerNorm(dim_model)
+        self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.attention = nn.MultiheadAttention(
             dim_model,
             n_heads,
@@ -183,8 +183,8 @@ class CrossAttentionToMixture(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
         super().__init__()
         self.dim_model = dim_model
-        self.x_norm = nn.LayerNorm(dim_model)
-        self.y_norm = nn.LayerNorm(dim_model)
+        self.x_norm = nn.RMSNorm(dim_model, eps=1e-6)
+        self.y_norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.attention = nn.MultiheadAttention(
             dim_model,
             n_heads,
@@ -230,7 +230,7 @@ class FeedForward(nn.Module):
     ):
         super().__init__()
 
-        self.norm = nn.LayerNorm(dim_model)
+        self.norm = nn.RMSNorm(dim_model, eps=1e-6)
 
         self.ffn = nn.Sequential(
             nn.Linear(dim_model, dim_feedforward),
