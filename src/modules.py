@@ -1,4 +1,5 @@
 import torch
+import math
 from collections import OrderedDict
 import torch.nn as nn
 
@@ -15,7 +16,7 @@ class PermutedLayerNorm(nn.Module):
         return x
 
 class ConvEncoder(nn.Module):
-    def __init__(self, input_channels: int = 4, dim_model: int = 128, dropout: float = 0.1):
+    def __init__(self, input_channels: int = 4, dim_model: int = 256, dropout: float = 0.1):
         super().__init__()
 
         self.dim_model = dim_model
@@ -50,22 +51,77 @@ class ConvEncoder(nn.Module):
 
         return x
 
-class TimeEmbedding(nn.Module):
-    def __init__(self, dim_model: int = 128):
+class SinusoidalTimeEmbedding(nn.Module):
+    def __init__(
+        self,
+        dim_model: int = 256,
+        max_period: int = 10_000,
+        time_scale: float = 1_000.0,
+    ):
         super().__init__()
+
+        half_dim = dim_model // 2
+        frequencies = torch.exp(
+            -math.log(max_period)
+            * torch.arange(half_dim, dtype=torch.float32)
+            / half_dim
+        )
+
+        self.register_buffer("frequencies", frequencies)
         self.dim_model = dim_model
-        self.linear = nn.Linear(1, dim_model)
+        self.time_scale = time_scale
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
-        # t: (B, 1)
-        t_emb = self.linear(t)  # (B, dim_model)
-        return t_emb
+        # t: (B,) ou (B, 1)
+        t = t.reshape(-1) * self.time_scale
+
+        angles = t[:, None] * self.frequencies[None, :]
+
+        embedding = torch.cat(
+            [torch.sin(angles), torch.cos(angles)],
+            dim=-1,
+        )
+
+        return embedding
+
+
+class TimeEmbedding(nn.Module):
+    def __init__(self, dim_model: int = 256):
+        super().__init__()
+
+        self.sinusoidal_embedding = SinusoidalTimeEmbedding(dim_model)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(dim_model, dim_model),
+            nn.GELU(),
+            nn.Linear(dim_model, dim_model),
+        )
+
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        return self.mlp(self.sinusoidal_embedding(t))
+
+class FiLM(nn.Module):
+    def __init__(self, dim_model: int = 256):
+        super().__init__()
+
+        self.modulation = nn.Linear(dim_model, 2 * dim_model)
+
+        nn.init.zeros_(self.modulation.weight)
+        nn.init.zeros_(self.modulation.bias)
+
+    def forward(self, t_emb: torch.Tensor):
+        gamma, beta = self.modulation(t_emb).chunk(2, dim=-1)
+
+        gamma = gamma[:, None, None, :]
+        beta = beta[:, None, None, :]
+
+        return gamma, beta
 
 class FrequencySelfAttention(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
         super().__init__()
         self.dim_model = dim_model
-        self.norm = nn.LayerNorm(dim_model)
+        self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.attention = nn.MultiheadAttention(
             dim_model,
             n_heads,
@@ -74,11 +130,12 @@ class FrequencySelfAttention(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, gamma, beta):
         B, L, F, D = x.shape
         assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x dim"
 
         x_norm = self.norm(x)
+        x_norm = x_norm * (1 + gamma) + beta
         x_flat = x_norm.reshape(B * L, F, D)
 
         attn_out, _ = self.attention(
@@ -95,7 +152,7 @@ class SlotSelfAttention(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
         super().__init__()
         self.dim_model = dim_model
-        self.norm = nn.LayerNorm(dim_model)
+        self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.attention = nn.MultiheadAttention(
             dim_model,
             n_heads,
@@ -104,11 +161,12 @@ class SlotSelfAttention(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, gamma, beta):
         B, L, F, D = x.shape
         assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x dim"
 
         x_norm = self.norm(x)
+        x_norm = x_norm * (1 + gamma) + beta
         x_flat = x_norm.permute(0, 2, 1, 3).reshape(B * F, L, D)
 
         attn_out, _ = self.attention(
@@ -125,8 +183,8 @@ class CrossAttentionToMixture(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
         super().__init__()
         self.dim_model = dim_model
-        self.x_norm = nn.LayerNorm(dim_model)
-        self.y_norm = nn.LayerNorm(dim_model)
+        self.x_norm = nn.RMSNorm(dim_model, eps=1e-6)
+        self.y_norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.attention = nn.MultiheadAttention(
             dim_model,
             n_heads,
@@ -135,7 +193,7 @@ class CrossAttentionToMixture(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, x, y):
+    def forward(self, x, y, gamma, beta):
         # x: (B, L, F, D)
         # y: (B, F, D)
 
@@ -148,6 +206,7 @@ class CrossAttentionToMixture(nn.Module):
         assert Dy == self.dim_model
 
         x_norm = self.x_norm(x)
+        x_norm = x_norm * (1 + gamma) + beta
         y_norm = self.y_norm(y)
         
         x_flat = x_norm.reshape(B, L * F, D)
@@ -171,7 +230,7 @@ class FeedForward(nn.Module):
     ):
         super().__init__()
 
-        self.norm = nn.LayerNorm(dim_model)
+        self.norm = nn.RMSNorm(dim_model, eps=1e-6)
 
         self.ffn = nn.Sequential(
             nn.Linear(dim_model, dim_feedforward),
@@ -182,8 +241,10 @@ class FeedForward(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
-        return x + self.dropout(self.ffn(self.norm(x)))
+    def forward(self, x, gamma, beta):
+        x_norm = self.norm(x)
+        x_norm = x_norm * (1 + gamma) + beta
+        return x + self.dropout(self.ffn(x_norm))
 
 class AxialSeparatorBlock(nn.Module):
     def __init__(
@@ -194,6 +255,8 @@ class AxialSeparatorBlock(nn.Module):
         dropout: float = 0.1,
     ):
         super().__init__()
+
+        self.film = FiLM(dim_model)
 
         self.freq_attn = FrequencySelfAttention(
             dim_model=dim_model,
@@ -219,11 +282,12 @@ class AxialSeparatorBlock(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, x, y):
-        x = self.freq_attn(x)
-        x = self.slot_attn(x)
-        x = self.cross_attn(x, y)
-        x = self.ffn(x)
+    def forward(self, x, y, t_emb):
+        gamma, beta = self.film(t_emb)
+        x = self.freq_attn(x, gamma, beta)
+        x = self.slot_attn(x, gamma, beta)
+        x = self.cross_attn(x, y, gamma, beta)
+        x = self.ffn(x, gamma, beta)
         return x
     
 if __name__ == "__main__":
@@ -231,23 +295,27 @@ if __name__ == "__main__":
     print(f"h shape: {h.shape}")
     y = torch.randn(32, 128, 256)
     print(f"y shape: {y.shape}")
+    t_emb = torch.randn(32, 256)
+
+    film = FiLM()
+    gamma, beta = film(t_emb)
 
     freq_attn = FrequencySelfAttention()
-    out_freq = freq_attn(h)
+    out_freq = freq_attn(h, gamma, beta)
     print(f"out_freq.shape: {out_freq.shape}")
 
     slot_attn = SlotSelfAttention()
-    out_slot = slot_attn(h)
+    out_slot = slot_attn(h, gamma, beta)
     print(f"out_slot.shape: {out_slot.shape}")
 
     cross_attn = CrossAttentionToMixture()
-    out_cross = cross_attn(h, y)
+    out_cross = cross_attn(h, y, gamma, beta)
     print(f"out_cross.shape: {out_cross.shape}")
 
 
     block_1 = AxialSeparatorBlock()
     nb_params = sum(p.numel() for p in block_1.parameters() if p.requires_grad)
     print(f"nb_params : {nb_params}")
-    out_1 = block_1(h, y)
+    out_1 = block_1(h, y, t_emb)
     print(f"out_1 shape: {out_1.shape}")
 
