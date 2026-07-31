@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from src.model import FlowSeparator
 from src.dataset import create_train_val_datasets
 from src.losses import (
-    FlowMatchingPIT_MSELoss,
+    FlowMatchingPIT_DBNormalizedLoss,
     FlowMatchingPIT_RMSELoss,
     ReconstructionPIT_MSELoss,
     ReconstructionPIT_RMSELoss
@@ -59,8 +59,9 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     device = get_device()
     logger.info(f"Using device: {device}")
 
-    train_criterion = FlowMatchingPIT_MSELoss()
+    train_criterion = FlowMatchingPIT_DBNormalizedLoss()
     val_criterion = ReconstructionPIT_MSELoss()
+    logger.info(f"Training criterion: {train_criterion.__class__.__name__}")
 
 
     model = FlowSeparator(max_k=MAX_K).to(device)
@@ -130,6 +131,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "scheduler_patience": PATIENCE,
         "weight_decay": WEIGHT_DECAY,
         "epochs": NB_EPOCHS,
+        "train_loss": train_criterion.__class__.__name__,
     }
     aim_run["dataset"] = {
         "dataset_path": str(dataset_path),
@@ -207,7 +209,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             logger.info(f"Minimum LR {LR_MIN:.2e} reached at epoch {aim_epoch}.")
 
         track_metric(
-            "Training Flow Matching Loss",
+            "Training dB-Normalized Flow Matching Loss",
             train_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -215,7 +217,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
-            "Training Source Loss",
+            "Training Source Velocity MSE",
             train_source_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -223,7 +225,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
-            "Training Residual Loss",
+            "Training Residual Velocity MSE",
             train_residual_loss,
             step=aim_epoch,
             epoch=aim_epoch,
@@ -264,7 +266,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
 
         logger.info(
             f"Epoch {epoch+1}/{NB_EPOCHS} :\n"
-            f" - Train Loss: {train_loss:.4f} (Source: {train_source_loss:.4f}, Residual: {train_residual_loss:.4f})\n"
+            f" - Train dB-Normalized Loss: {train_loss:.4f}\n"
+            f" - Train Velocity MSE: Source: {train_source_loss:.4f}, Residual: {train_residual_loss:.4f}\n"
             f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
         )
         if val_loss < best_val_loss:

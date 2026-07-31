@@ -26,8 +26,8 @@ def build_initial_state(mixture, X_1, generator=None):
 def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True):
     model.train()
     total_loss = 0.0
-    total_source_loss = 0.0
-    total_residual_loss = 0.0
+    total_source_mse = 0.0
+    total_residual_mse = 0.0
     timer = StageTimer(device, logger, prefix="Training", enabled=timing)
 
     for mixture, X_1, K in timer.iter_batches(dataloader):
@@ -50,7 +50,7 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
             v = model(X_t, t, mixture, K)
 
         with timer.measure("loss_backward_step"):
-            loss, source_loss, residual_loss = criterion(v, X_0, X_1)
+            loss, source_mse, residual_mse = criterion(v, X_0, X_1)
 
             optimizer.zero_grad()
             loss.backward()
@@ -58,16 +58,16 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
 
         loss_value = loss.item()
         total_loss += loss_value
-        total_source_loss += source_loss.item()
-        total_residual_loss += residual_loss.item()
+        total_source_mse += source_mse.item()
+        total_residual_mse += residual_mse.item()
 
     timer.log()
 
     avg_loss = total_loss / len(dataloader)
-    avg_source_loss = total_source_loss / len(dataloader)
-    avg_residual_loss = total_residual_loss / len(dataloader)
+    avg_source_mse = total_source_mse / len(dataloader)
+    avg_residual_mse = total_residual_mse / len(dataloader)
     
-    return avg_loss, avg_source_loss, avg_residual_loss
+    return avg_loss, avg_source_mse, avg_residual_mse
 
 
 if __name__ == "__main__":

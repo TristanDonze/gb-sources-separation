@@ -12,11 +12,11 @@ def _reduce(loss, reduction="mean"):
     else:
         raise ValueError(f"Unknown reduction: {reduction}")
 
-def hungarian_loss(cost):
+def hungarian_assignment(cost):
     B = cost.shape[0]
     cost_cpu = cost.detach().cpu().float().numpy()
 
-    losses = []
+    assignments = []
 
     for b in range(B):
         row_ind, col_ind = linear_sum_assignment(cost_cpu[b])
@@ -24,9 +24,18 @@ def hungarian_loss(cost):
         row_ind = torch.as_tensor(row_ind, device=cost.device)
         col_ind = torch.as_tensor(col_ind, device=cost.device)
 
-        losses.append(cost[b, row_ind, col_ind].mean())
+        assignment = torch.empty(cost.shape[1], dtype=torch.long, device=cost.device)
+        assignment[row_ind] = col_ind
+        assignments.append(assignment)
 
-    return torch.stack(losses)  # (B,)
+    return torch.stack(assignments)  # (B, K_pred)
+
+
+def hungarian_loss(cost):
+    assignment = hungarian_assignment(cost)
+    selected_cost = cost.gather(dim=2, index=assignment.unsqueeze(-1)).squeeze(-1)
+
+    return selected_cost.mean(dim=1)  # (B,)
 
 
 class FlowMatchingPIT_Loss(nn.Module):
@@ -122,6 +131,51 @@ class FlowMatchingPIT_MSELoss(FlowMatchingPIT_Loss):
 
     def scalar_loss(self, diff):
         return diff.pow(2).mean(dim=(-1, -2))
+
+
+class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
+    def __init__(self, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, v_pred, X_0, X_1, reduction="mean"):
+        assert v_pred.shape == X_0.shape == X_1.shape
+
+        pred_sources = v_pred[:, :-1]
+        X0_sources = X_0[:, :-1]
+        X1_sources = X_1[:, :-1]
+
+        candidate_target_velocity = X1_sources[:, None] - X0_sources[:, :, None]
+        candidate_diff = pred_sources[:, :, None] - candidate_target_velocity
+        assignment_cost = candidate_diff.pow(2).mean(dim=(-1, -2))
+        assignment = hungarian_assignment(assignment_cost)
+
+        B, K, C, F = X1_sources.shape
+        gather_index = assignment[:, :, None, None].expand(B, K, C, F)
+        aligned_X1_sources = X1_sources.gather(dim=1, index=gather_index)
+
+        source_target_velocity = aligned_X1_sources - X0_sources
+        residual_target_velocity = X_1[:, -1] - X_0[:, -1]
+        target_velocity = torch.cat(
+            [source_target_velocity, residual_target_velocity[:, None]],
+            dim=1,
+        )
+
+        diff = v_pred - target_velocity
+        error_energy = diff.pow(2).sum(dim=(1, 2, 3))
+        target_energy = target_velocity.pow(2).sum(dim=(1, 2, 3))
+        loss = 10 * torch.log10(
+            (error_energy + self.eps) / (target_energy + self.eps)
+        )
+
+        source_mse = diff[:, :-1].pow(2).mean(dim=(1, 2, 3))
+        residual_mse = diff[:, -1].pow(2).mean(dim=(1, 2))
+
+        return (
+            _reduce(loss, reduction),
+            _reduce(source_mse, reduction),
+            _reduce(residual_mse, reduction),
+        )
 
 
 class FlowMatchingPIT_RMSELoss(FlowMatchingPIT_Loss):
