@@ -138,7 +138,7 @@ class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
         super().__init__()
         self.eps = eps
 
-    def forward(self, v_pred, X_0, X_1, reduction="mean"):
+    def find_assignment(self, v_pred, X_0, X_1):
         assert v_pred.shape == X_0.shape == X_1.shape
 
         pred_sources = v_pred[:, :-1]
@@ -148,18 +148,27 @@ class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
         candidate_target_velocity = X1_sources[:, None] - X0_sources[:, :, None]
         candidate_diff = pred_sources[:, :, None] - candidate_target_velocity
         assignment_cost = candidate_diff.pow(2).mean(dim=(-1, -2))
-        assignment = hungarian_assignment(assignment_cost)
+        return hungarian_assignment(assignment_cost)
+
+    def align_targets(self, X_1, assignment):
+        X1_sources = X_1[:, :-1]
 
         B, K, C, F = X1_sources.shape
+        assert assignment.shape == (B, K)
+
         gather_index = assignment[:, :, None, None].expand(B, K, C, F)
         aligned_X1_sources = X1_sources.gather(dim=1, index=gather_index)
 
-        source_target_velocity = aligned_X1_sources - X0_sources
-        residual_target_velocity = X_1[:, -1] - X_0[:, -1]
-        target_velocity = torch.cat(
-            [source_target_velocity, residual_target_velocity[:, None]],
+        return torch.cat(
+            [aligned_X1_sources, X_1[:, -1:]],
             dim=1,
         )
+
+    def forward(self, v_pred, X_0, X_1, assignment, reduction="mean"):
+        assert v_pred.shape == X_0.shape == X_1.shape
+
+        aligned_X1 = self.align_targets(X_1, assignment)
+        target_velocity = aligned_X1 - X_0
 
         diff = v_pred - target_velocity
         error_energy = diff.pow(2).sum(dim=(1, 2, 3))

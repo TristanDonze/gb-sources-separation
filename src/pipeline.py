@@ -62,6 +62,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     train_criterion = FlowMatchingPIT_DBNormalizedLoss()
     val_criterion = ReconstructionPIT_MSELoss()
     logger.info(f"Training criterion: {train_criterion.__class__.__name__}")
+    logger.info("Source permutation: PIT at t=0, fixed along each training path")
 
 
     model = FlowSeparator(max_k=MAX_K).to(device)
@@ -132,6 +133,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "weight_decay": WEIGHT_DECAY,
         "epochs": NB_EPOCHS,
         "train_loss": train_criterion.__class__.__name__,
+        "source_permutation": "PIT at t=0",
     }
     aim_run["dataset"] = {
         "dataset_path": str(dataset_path),

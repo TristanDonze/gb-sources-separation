@@ -41,16 +41,29 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
         with timer.measure("prepare"):
             X_0 = build_initial_state(mixture, X_1)
 
+        with timer.measure("pet_assignment"):
+            with torch.no_grad():
+                t_0 = torch.zeros(B, device=mixture.device, dtype=mixture.dtype)
+                v_0 = model(X_0, t_0, mixture, K)
+                assignment = criterion.find_assignment(v_0, X_0, X_1)
+                aligned_X_1 = criterion.align_targets(X_1, assignment)
+
+        with timer.measure("prepare"):
             t = torch.rand(B, device=mixture.device)
             t_view = t[:, None, None, None]
 
-            X_t = (1 - t_view) * X_0 + t_view * X_1
+            X_t = (1 - t_view) * X_0 + t_view * aligned_X_1
 
         with timer.measure("model_forward"):
             v = model(X_t, t, mixture, K)
 
         with timer.measure("loss_backward_step"):
-            loss, source_mse, residual_mse = criterion(v, X_0, X_1)
+            loss, source_mse, residual_mse = criterion(
+                v,
+                X_0,
+                X_1,
+                assignment,
+            )
 
             optimizer.zero_grad()
             loss.backward()
