@@ -126,8 +126,9 @@ class ReconstructionPIT_Loss(nn.Module):
 
 
 class FlowMatchingPET_DBNormalizedLoss(nn.Module):
-    def __init__(self, eps: float = 1e-8):
+    def __init__(self, residual_weight: float = 1.0, eps: float = 1e-8):
         super().__init__()
+        self.residual_weight = residual_weight
         self.eps = eps
 
     def find_assignment(self, v_pred, X_0, X_1):
@@ -163,8 +164,16 @@ class FlowMatchingPET_DBNormalizedLoss(nn.Module):
         target_velocity = aligned_X1 - X_0
 
         diff = v_pred - target_velocity # represents the difference between predicted and target velocities
-        error_energy = diff.pow(2).sum(dim=(1, 2, 3)) # shape (B,)
-        target_energy = target_velocity.pow(2).sum(dim=(1, 2, 3))
+
+        source_error = diff[:, :-1].pow(2).sum(dim=(1, 2, 3))
+        residual_error = diff[:, -1].pow(2).sum(dim=(1, 2))
+
+        source_target = target_velocity[:, :-1].pow(2).sum(dim=(1, 2, 3))
+        residual_target = target_velocity[:, -1].pow(2).sum(dim=(1, 2))
+
+        error_energy = source_error + self.residual_weight * residual_error
+        target_energy = source_target + self.residual_weight * residual_target
+
         loss = 10 * torch.log10(
             (error_energy + self.eps) / (target_energy + self.eps)
         )
