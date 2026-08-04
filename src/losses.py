@@ -125,14 +125,6 @@ class ReconstructionPIT_Loss(nn.Module):
         return _reduce(loss, reduction), _reduce(source_loss, reduction), _reduce(residual_loss, reduction)
 
 
-class FlowMatchingPIT_MSELoss(FlowMatchingPIT_Loss):
-    def pairwise_cost(self, diff):
-        return diff.pow(2).mean(dim=(-1, -2))
-
-    def scalar_loss(self, diff):
-        return diff.pow(2).mean(dim=(-1, -2))
-
-
 class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
     def __init__(self, eps: float = 1e-8):
         super().__init__()
@@ -170,8 +162,8 @@ class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
         aligned_X1 = self.align_targets(X_1, assignment)
         target_velocity = aligned_X1 - X_0
 
-        diff = v_pred - target_velocity
-        error_energy = diff.pow(2).sum(dim=(1, 2, 3))
+        diff = v_pred - target_velocity # represents the difference between predicted and target velocities
+        error_energy = diff.pow(2).sum(dim=(1, 2, 3)) # shape (B,)
         target_energy = target_velocity.pow(2).sum(dim=(1, 2, 3))
         loss = 10 * torch.log10(
             (error_energy + self.eps) / (target_energy + self.eps)
@@ -185,6 +177,15 @@ class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
             _reduce(source_mse, reduction),
             _reduce(residual_mse, reduction),
         )
+
+
+
+class FlowMatchingPIT_MSELoss(FlowMatchingPIT_Loss):
+    def pairwise_cost(self, diff):
+        return diff.pow(2).mean(dim=(-1, -2))
+
+    def scalar_loss(self, diff):
+        return diff.pow(2).mean(dim=(-1, -2))
 
 
 class FlowMatchingPIT_RMSELoss(FlowMatchingPIT_Loss):
