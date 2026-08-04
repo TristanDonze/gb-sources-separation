@@ -36,7 +36,9 @@ def evaluate(model, dataloader, criteria, device, timing=True):
     total_nmse_source = 0.0
     total_nmse_source_db = 0.0
 
-    dt = 1.0 / NB_OF_STEPS
+    time_grid = 0.5 * (
+        1 - torch.cos(torch.linspace(0.0, torch.pi, NB_OF_STEPS + 1))
+    )
     generator = torch.Generator(device=device)
     generator.manual_seed(0)
 
@@ -55,7 +57,8 @@ def evaluate(model, dataloader, criteria, device, timing=True):
                 X_t = build_initial_state(mixture, X_1, generator=generator)
 
             for step in range(NB_OF_STEPS):
-                t_val = step * dt
+                t_val = time_grid[step].item()
+                dt = (time_grid[step + 1] - time_grid[step]).item()
                 t = torch.full(
                     (B,),
                     t_val,
