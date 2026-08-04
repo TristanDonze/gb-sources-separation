@@ -52,6 +52,8 @@ def save_checkpoint(
     val_losses,
     val_source_losses,
     val_residual_losses,
+    val_nmse_sources,
+    val_nmse_source_dbs,
     best_val_loss,
     best_val_loss_epoch,
     epoch,
@@ -69,6 +71,8 @@ def save_checkpoint(
         "val_losses": val_losses,
         "val_source_losses": val_source_losses,
         "val_residual_losses": val_residual_losses,
+        "val_nmse_sources": val_nmse_sources,
+        "val_nmse_source_dbs": val_nmse_source_dbs,
         "best_val_loss": best_val_loss,
         "best_val_loss_epoch": best_val_loss_epoch,
         "min_lr_reached_epoch": min_lr_reached_epoch,
@@ -87,6 +91,8 @@ def load_checkpoint(model, optimizer, scheduler, path):
     val_losses = checkpoint["val_losses"]
     val_source_losses = checkpoint["val_source_losses"]
     val_residual_losses = checkpoint["val_residual_losses"]
+    val_nmse_sources = checkpoint.get("val_nmse_sources", [])
+    val_nmse_source_dbs = checkpoint.get("val_nmse_source_dbs", [])
     best_val_loss = checkpoint["best_val_loss"]
     best_val_loss_epoch = checkpoint["best_val_loss_epoch"]
     epoch = checkpoint["epoch"]
@@ -98,6 +104,8 @@ def load_checkpoint(model, optimizer, scheduler, path):
         val_losses,
         val_source_losses,
         val_residual_losses,
+        val_nmse_sources,
+        val_nmse_source_dbs,
         best_val_loss,
         best_val_loss_epoch,
         epoch,

@@ -125,7 +125,7 @@ class ReconstructionPIT_Loss(nn.Module):
         return _reduce(loss, reduction), _reduce(source_loss, reduction), _reduce(residual_loss, reduction)
 
 
-class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
+class FlowMatchingPET_DBNormalizedLoss(nn.Module):
     def __init__(self, eps: float = 1e-8):
         super().__init__()
         self.eps = eps
@@ -178,6 +178,38 @@ class FlowMatchingPIT_DBNormalizedLoss(nn.Module):
             _reduce(residual_mse, reduction),
         )
 
+
+class ReconstructionPIT_NMSELoss(nn.Module):
+    def __init__(self, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, predictions, targets, reduction="mean"):
+        assert predictions.shape == targets.shape
+
+        cost = (
+            predictions[:, :, None] - targets[:, None]
+        ).pow(2).mean(dim=(-1, -2))
+
+        assignment = hungarian_assignment(cost)
+
+        B, K, C, F = targets.shape
+        gather_index = assignment[:, :, None, None].expand(B, K, C, F)
+        aligned_slots = targets.gather(dim=1, index=gather_index)
+
+        error_energy = (
+            predictions - aligned_slots
+        ).pow(2).sum(dim=(-1, -2))
+
+        source_energy = aligned_slots.pow(2).sum(dim=(-1, -2))
+
+        nmse_source = error_energy / (source_energy + self.eps)
+        nmse_source_db = 10 * torch.log10(nmse_source + self.eps)
+
+        return (
+            _reduce(nmse_source, reduction),
+            _reduce(nmse_source_db, reduction),
+        )
 
 
 class FlowMatchingPIT_MSELoss(FlowMatchingPIT_Loss):

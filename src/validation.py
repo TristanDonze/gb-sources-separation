@@ -25,13 +25,16 @@ def build_initial_state(mixture, X_1, generator=None):
     return S_bar + Z
 
 
-def evaluate(model, dataloader, criterion, device, timing=True):
+def evaluate(model, dataloader, criteria, device, timing=True):
     model.eval()
 
     total_loss = 0.0
     total_source_loss = 0.0
     total_residual_loss = 0.0
     total_samples = 0
+
+    total_nmse_source = 0.0
+    total_nmse_source_db = 0.0
 
     dt = 1.0 / NB_OF_STEPS
     generator = torch.Generator(device=device)
@@ -67,17 +70,30 @@ def evaluate(model, dataloader, criterion, device, timing=True):
 
             X_hat = X_t
 
-            with timer.measure("criterion"):
-                loss, source_loss, residual_loss = criterion(X_hat, X_1)
+            # Classic Reconstrion PIT MSE Loss
+            with timer.measure("criterion_1"):
+                loss, source_loss, residual_loss = criteria[0](X_hat, X_1)
 
             total_loss += loss.item() * B
             total_source_loss += source_loss.item() * B
             total_residual_loss += residual_loss.item() * B
+
+            # NMSE Loss
+
+            with timer.measure("criterion_2"):
+                pred_sources = X_hat[:, :-1]
+                true_sources = X_1[:, :-1]
+                nmse_source, nmse_source_db = criteria[1](pred_sources, true_sources)
+
+            total_nmse_source += nmse_source.item() * B
+            total_nmse_source_db += nmse_source_db.item() * B
             total_samples += B
 
     average_loss = total_loss / total_samples
     average_source_loss = total_source_loss / total_samples
     average_residual_loss = total_residual_loss / total_samples
+    average_nmse_source = total_nmse_source / total_samples
+    average_nmse_source_db = total_nmse_source_db / total_samples
     timer.log(
         renamed_averages={"model_forward": "model_forward_per_call"},
         extra_averages={
@@ -85,4 +101,4 @@ def evaluate(model, dataloader, criterion, device, timing=True):
         },
     )
 
-    return average_loss, average_source_loss, average_residual_loss
+    return average_loss, average_source_loss, average_residual_loss, average_nmse_source, average_nmse_source_db

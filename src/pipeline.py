@@ -5,10 +5,9 @@ from torch.utils.data import DataLoader
 from src.model import FlowSeparator
 from src.dataset import create_train_val_datasets
 from src.losses import (
-    FlowMatchingPIT_DBNormalizedLoss,
-    FlowMatchingPIT_RMSELoss,
+    FlowMatchingPET_DBNormalizedLoss,
     ReconstructionPIT_MSELoss,
-    ReconstructionPIT_RMSELoss
+    ReconstructionPIT_NMSELoss
 )
 from src.training import train_one_epoch
 from src.validation import evaluate
@@ -59,8 +58,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     device = get_device()
     logger.info(f"Using device: {device}")
 
-    train_criterion = FlowMatchingPIT_DBNormalizedLoss()
-    val_criterion = ReconstructionPIT_MSELoss()
+    train_criterion = FlowMatchingPET_DBNormalizedLoss()
+    val_criteria = (ReconstructionPIT_MSELoss(), ReconstructionPIT_NMSELoss())
     logger.info(f"Training criterion: {train_criterion.__class__.__name__}")
     logger.info("Source permutation: PIT at t=0, fixed along each training path")
 
@@ -151,6 +150,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     val_losses = []
     val_source_losses = []
     val_residual_losses = []
+    val_nmse_sources = []
+    val_nmse_source_dbs = []
     best_val_loss = float("inf")
     best_val_loss_epoch = 0
     min_lr_reached_epoch = None
@@ -163,6 +164,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             val_losses,
             val_source_losses,
             val_residual_losses,
+            val_nmse_sources,
+            val_nmse_source_dbs,
             best_val_loss,
             best_val_loss_epoch,
             last_completed_epoch,
@@ -182,10 +185,10 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             device,
             timing=ENABLE_TIMING,
         )
-        val_loss, val_source_loss, val_residual_loss = evaluate(
+        val_loss, val_source_loss, val_residual_loss, val_nmse_source, val_nmse_source_db = evaluate(
             model,
             val_loader,
-            val_criterion,
+            val_criteria,
             device,
             timing=ENABLE_TIMING,
         )
@@ -198,6 +201,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         val_losses.append(val_loss)
         val_source_losses.append(val_source_loss)
         val_residual_losses.append(val_residual_loss)
+        val_nmse_sources.append(val_nmse_source)
+        val_nmse_source_dbs.append(val_nmse_source_db)
 
         scheduler.step(val_loss)
 
@@ -259,6 +264,22 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             granularity="epoch",
         )
         track_metric(
+            "Validation Reconstruction Source NMSE",
+            val_nmse_source,
+            step=aim_epoch,
+            epoch=aim_epoch,
+            split="val",
+            granularity="epoch",
+        )
+        track_metric(
+            "Validation Reconstruction Source NMSE (dB)",
+            val_nmse_source_db,
+            step=aim_epoch,
+            epoch=aim_epoch,
+            split="val",
+            granularity="epoch",
+        )
+        track_metric(
             "learning_rate",
             optimizer.param_groups[0]["lr"],
             step=aim_epoch,
@@ -271,6 +292,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             f" - Train dB-Normalized Loss: {train_loss:.4f}\n"
             f" - Train Velocity MSE: Source: {train_source_loss:.4f}, Residual: {train_residual_loss:.4f}\n"
             f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
+            f" - Validation Source NMSE: {val_nmse_source:.4f} (dB: {val_nmse_source_db:.4f})\n"
         )
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -293,6 +315,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 val_losses,
                 val_source_losses,
                 val_residual_losses,
+                val_nmse_sources,
+                val_nmse_source_dbs,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,
@@ -309,6 +333,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 val_losses,
                 val_source_losses,
                 val_residual_losses,
+                val_nmse_sources,
+                val_nmse_source_dbs,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,
