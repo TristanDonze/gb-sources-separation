@@ -239,3 +239,6 @@ TODO.MD
 
 # csv
 *.csv
+
+# pkl
+*.pkl
