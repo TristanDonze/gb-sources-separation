@@ -60,41 +60,75 @@ class FlowSeparator(nn.Module):
         return v
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    def interpolate_x(X_0, X_1, t): 
-        t_view = t[:, None, None, None]
-        return (1 - t_view) * X_0 + t_view * X_1
+    import torch.profiler
+    from src.utils import get_device
 
-    B = 32
+    device = get_device()
+    dtype = torch.bfloat16  
+    print(f"Using device: {device} - dtype: {dtype}")
+
+    max_k = 3 
+
+    B = 480
     K_val = 2
-    K = torch.full((B,), K_val, dtype=torch.long, device=device)
-    L = K_val + 1
     nb_of_channels = 4
     nb_of_freq_bins = 128
 
-    S = torch.randn(B, L, nb_of_channels, nb_of_freq_bins, device=device) # (B, L, C, F)
-    y = S.sum(dim=1) # (B, C, F)
-    print(f"S shape : {S.shape}")
-    print(f"y shape : {y.shape}")
+    def generate_dummy_data(B, K_val, nb_of_channels, nb_of_freq_bins, dtype, device):
+
+        def interpolate_x(X_0, X_1, t): 
+            t_view = t[:, None, None, None]
+            return (1 - t_view) * X_0 + t_view * X_1
+        
+        L = K_val + 1
+        K = torch.full((B,), K_val, dtype=torch.long, device=device)
+        L = K_val + 1
+
+        S = torch.randn(B, L, nb_of_channels, nb_of_freq_bins, dtype=dtype, device=device) # (B, L, C, F)
+        y = S.sum(dim=1) # (B, C, F)
+        print(f"S shape : {S.shape}")
+        print(f"y shape : {y.shape}")
+        
+        s_bar = y / L # (B, C, F)
+        S_bar = s_bar.unsqueeze(1).repeat(1, L, 1, 1).to(device) # (B, L, C, F)
+        print(f"s_bar shape : {s_bar.shape}")
+        print(f"S_bar shape : {S_bar.shape}")
+
+        Z = torch.randn(B, L, nb_of_channels, nb_of_freq_bins, dtype=dtype, device=device)
+        Z = Z - Z.mean(dim=1, keepdim=True)
+        print(f"Z shape : {Z.shape}")
+
+        X_0 = S_bar + Z
+        X_1 = S
+        t = torch.rand(B, dtype=dtype, device=device)
+
+        X_t = interpolate_x(X_0, X_1, t)
+        print(f"X_t shape : {X_t.shape}")
+
+        return X_t, t, y, K
+
+    X_t, t, y, K = generate_dummy_data(B, K_val, nb_of_channels, nb_of_freq_bins, dtype, device)
+
+    model = FlowSeparator(
+        input_channels=nb_of_channels, 
+        max_k=max_k, 
+        n_blocks=4, 
+        dim_model=256, 
+        n_heads=4, 
+        dim_feedforward=512, 
+        dropout=0.1
+    ).to(device, dtype=dtype)
     
-    s_bar = y / L # (B, C, F)
-    S_bar = s_bar.unsqueeze(1).repeat(1, L, 1, 1).to(device) # (B, L, C, F)
-    print(f"s_bar shape : {s_bar.shape}")
-    print(f"S_bar shape : {S_bar.shape}")
+    _ = model(X_t, t, y, K)
+    torch.cuda.synchronize()
 
-    Z = torch.randn(B, L, nb_of_channels, nb_of_freq_bins, device=device)
-    Z = Z - Z.mean(dim=1, keepdim=True)
-    print(f"Z shape : {Z.shape}")
-
-    X_0 = S_bar + Z
-    X_1 = S
-    t = torch.rand(B, device=device)
-
-    X_t = interpolate_x(X_0, X_1, t)
-    print(f"X_t shape : {X_t.shape}")
-
-    model = FlowSeparator(input_channels=nb_of_channels, max_k=K_val, n_blocks=4, dim_model=256, n_heads=4, dim_feedforward=512, dropout=0.1).to(device)
-    nb_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Number of trainable parameters: {nb_params}")
-    out = model(X_t, t, y, K)
-    print(f"out shape : {out.shape}")
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU, 
+            torch.profiler.ProfilerActivity.CUDA
+        ],
+        record_shapes=True,
+    ) as prof:
+        out = model(X_t, t, y, K)
+        torch.cuda.synchronize()
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=15))
