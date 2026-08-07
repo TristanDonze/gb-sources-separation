@@ -1,7 +1,9 @@
 import torch
+import torch.nn as nn
+from torch.nn.functional import scaled_dot_product_attention
+
 import math
 from collections import OrderedDict
-import torch.nn as nn
 
 class PermutedLayerNorm(nn.Module):
     def __init__(self, normalized_shape):
@@ -118,47 +120,59 @@ class FiLM(nn.Module):
         return gamma, beta
 
 class FrequencySelfAttention(nn.Module):
-    def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
+    def __init__(self, dim_model : int = 256, n_heads : int = 4, dropout : float = 0.1):
         super().__init__()
         self.dim_model = dim_model
+        self.n_heads = n_heads
+        self.dropout_p = dropout
+
+        self.head_dim = dim_model // n_heads
+
+        self.qkv_proj = nn.Linear(dim_model, dim_model * 3)
+        self.out_proj = nn.Linear(dim_model, dim_model)
+        
         self.norm = nn.RMSNorm(dim_model, eps=1e-6)
-        self.attention = nn.MultiheadAttention(
-            dim_model,
-            n_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, gamma, beta):
-        B, L, F, D = x.shape
-        assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x dim"
+        B, L, F, D = x.shape # B = Batch Size, L = Number of Slots, F = Number of frequency bins, D = dim_model
+        assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x_dim"
 
         x_norm = self.norm(x)
         x_norm = x_norm * (1 + gamma) + beta
-        x_flat = x_norm.reshape(B * L, F, D)
 
-        attn_out, _ = self.attention(
-            x_flat,
-            x_flat,
-            x_flat,
-            need_weights=False,
-        )
+        qkv = self.qkv_proj(x_norm) # (B*L, F, 3*D)
+        q, k, v = torch.chunk(input=qkv, chunks=3, dim=-1) # each of shape (B, L, F, D)
 
-        attn_out = attn_out.reshape(B, L, F, D)
-        return x + self.dropout(attn_out)
+        q = q.view(B, L, F, self.n_heads, self.head_dim).transpose(2, 3)
+        k = k.view(B, L, F, self.n_heads, self.head_dim).transpose(2, 3)
+        v = v.view(B, L, F, self.n_heads, self.head_dim).transpose(2, 3)
+
+        dropout = self.dropout_p if self.training else 0.0
+        attn_out = scaled_dot_product_attention(query = q, 
+                                                key = k , 
+                                                value = v, 
+                                                dropout_p = dropout
+                                                ) # shape : B*L, F, n_heads, head_dim
+        
+        attn_out = attn_out.transpose(2, 3).reshape(B, L, F, self.dim_model)
+        out = self.out_proj(attn_out)
+
+        return x + self.dropout(out)
 
 class SlotSelfAttention(nn.Module):
-    def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
+    def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout : float = 0.1):
         super().__init__()
         self.dim_model = dim_model
+        self.n_heads = n_heads
+        self.dropout_p = dropout
+
+        self.head_dim = dim_model // n_heads
+
+        self.qkv_proj = nn.Linear(dim_model, dim_model * 3)
+        self.out_proj = nn.Linear(dim_model, dim_model)
+
         self.norm = nn.RMSNorm(dim_model, eps=1e-6)
-        self.attention = nn.MultiheadAttention(
-            dim_model,
-            n_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, gamma, beta):
@@ -167,32 +181,45 @@ class SlotSelfAttention(nn.Module):
 
         x_norm = self.norm(x)
         x_norm = x_norm * (1 + gamma) + beta
-        x_flat = x_norm.permute(0, 2, 1, 3).reshape(B * F, L, D)
 
-        attn_out, _ = self.attention(
-            x_flat,
-            x_flat,
-            x_flat,
-            need_weights=False,
-        )
+        qkv = self.qkv_proj(x_norm)
+        q, k, v = torch.chunk(input = qkv, chunks = 3, dim = -1) # each of shape (B, L, F, D)
 
-        attn_out = attn_out.reshape(B, F, L, D).permute(0, 2, 1, 3)
-        return x + self.dropout(attn_out)
+        q = q.permute(0, 2, 1, 3).view(B, F, L, self.n_heads, self.head_dim).transpose(2, 3)
+        k = k.permute(0, 2, 1, 3).view(B, F, L, self.n_heads, self.head_dim).transpose(2, 3)
+        v = v.permute(0, 2, 1, 3).view(B, F, L, self.n_heads, self.head_dim).transpose(2, 3)
+
+        dropout = self.dropout_p if self.training else 0.0
+
+        attn_out = scaled_dot_product_attention(
+            query = q, 
+            key = k,
+            value = v,
+            dropout_p = dropout
+        ) # shape : (B, L, n_heads, F, head_dim)
+
+        attn_out = attn_out.transpose(2, 3).reshape(B, F, L, self.dim_model) # shape : (B, F, L, D)
+        out = self.out_proj(attn_out)
+        out = out.permute(0, 2, 1, 3)
+
+        return x + self.dropout(out)
 
 class CrossAttentionToMixture(nn.Module):
-    def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout=0.1):
+    def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout : float = 0.1):
         super().__init__()
         self.dim_model = dim_model
+        self.n_heads = n_heads
+        self.dropout_p = dropout
+
+        self.head_dim = dim_model // n_heads
+
+        self.query_proj = nn.Linear(dim_model, dim_model)
+        self.kv_proj = nn.Linear(dim_model, 2 * dim_model)
+        self.out_proj = nn.Linear(dim_model, dim_model)
+
         self.x_norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.y_norm = nn.RMSNorm(dim_model, eps=1e-6)
-        self.attention = nn.MultiheadAttention(
-            dim_model,
-            n_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
         self.dropout = nn.Dropout(dropout)
-    
     def forward(self, x, y, gamma, beta):
         # x: (B, L, F, D)
         # y: (B, F, D)
@@ -208,18 +235,29 @@ class CrossAttentionToMixture(nn.Module):
         x_norm = self.x_norm(x)
         x_norm = x_norm * (1 + gamma) + beta
         y_norm = self.y_norm(y)
-        
-        x_flat = x_norm.reshape(B, L * F, D)
 
-        attn_out, _ = self.attention(
-            x_flat,
-            y_norm,
-            y_norm,
-            need_weights=False
-        )
-        attn_out = attn_out.reshape(B, L, F, D)
+        q = self.query_proj(x_norm)  # (B, L, F, D)
+        kv = self.kv_proj(y_norm)  # (B, F, 2 * D)
+        k, v = kv.chunk(2, dim=-1)  # each has shape (B, F, D)
 
-        return x + self.dropout(attn_out)
+        q = q.reshape(B, L * F, self.n_heads, self.head_dim).transpose(1, 2) # shape : (B, n_heads, L * F, head_dim)
+        k = k.reshape(B, F, self.n_heads, self.head_dim).transpose(1, 2) # shape : (B, n_heads, F, head_dim)
+        v = v.reshape(B, F, self.n_heads, self.head_dim).transpose(1, 2) # shape : (B, n_heads, F, head_dim)
+
+        dropout = self.dropout_p if self.training else 0.0
+
+        attn_out = scaled_dot_product_attention(
+            query = q,
+            key = k,
+            value= v,
+            dropout_p=dropout
+        ) # shape : (B, n_heads, L * F, head_dim)
+
+        attn_out = attn_out.transpose(1, 2).reshape(B, L, F, D)
+
+        out = self.out_proj(attn_out)
+
+        return x + self.dropout(out)
 
 class FeedForward(nn.Module):
     def __init__(
@@ -291,11 +329,12 @@ class AxialSeparatorBlock(nn.Module):
         return x
     
 if __name__ == "__main__":
-    h = torch.randn(32, 3, 128, 256)
+    B, L, F, D = 512, 11, 128, 256
+    h = torch.randn(B, L, F, D)
     print(f"h shape: {h.shape}")
-    y = torch.randn(32, 128, 256)
+    y = torch.randn(B, F, D)
     print(f"y shape: {y.shape}")
-    t_emb = torch.randn(32, 256)
+    t_emb = torch.randn(B, D)
 
     film = FiLM()
     gamma, beta = film(t_emb)
