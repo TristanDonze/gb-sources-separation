@@ -49,7 +49,11 @@ class GalacticBinariesDataset(Dataset):
 
         if constant_K is True:
             raise ValueError("constant_K cannot be True. It must be either False or an integer value.")
-        
+
+        self.num_source_slots = (
+            self.max_K if self.constant_K is False else int(self.constant_K)
+        )
+
         if self.max_K > self.nb_selected_waveforms:
             raise ValueError(
                 f"max_K={self.max_K} cannot be greater than "
@@ -126,12 +130,12 @@ class GalacticBinariesDataset(Dataset):
         params = {}
         for attr in self.attr_names:
             values = np.asarray(getattr(self, attr)[sampled_indices])
-            padded_shape = (self.max_K,) + values.shape[1:]
+            padded_shape = (self.num_source_slots,) + values.shape[1:]
             padded = np.zeros(padded_shape, dtype=values.dtype)
             padded[:k] = values
             params[attr] = padded
 
-        params["source_mask"] = np.arange(self.max_K) < k
+        params["source_mask"] = np.arange(self.num_source_slots) < k
         params.update(self._build_frequency_support_params(sampled_indices, k))
         return params
 
@@ -145,10 +149,10 @@ class GalacticBinariesDataset(Dataset):
             channel_axes = tuple(range(1, source_waveforms.ndim - 1))
             freq_energy = np.sum(source_waveforms ** 2, axis=channel_axes)
 
-        starts = np.full(self.max_K, -1, dtype=np.int16)
-        stops = np.full(self.max_K, -1, dtype=np.int16)
-        peaks = np.full(self.max_K, -1, dtype=np.int16)
-        widths = np.zeros(self.max_K, dtype=np.int16)
+        starts = np.full(self.num_source_slots, -1, dtype=np.int16)
+        stops = np.full(self.num_source_slots, -1, dtype=np.int16)
+        peaks = np.full(self.num_source_slots, -1, dtype=np.int16)
+        widths = np.zeros(self.num_source_slots, dtype=np.int16)
 
         for source_idx in range(k):
             energy = freq_energy[source_idx]
@@ -201,19 +205,27 @@ class GalacticBinariesDataset(Dataset):
         mixture = mixture.astype(np.float32, copy=False)
         residual = residual.astype(np.float32, copy=False)
 
-        X_1 = np.concatenate(
-            [sources, residual[None, ...]], axis=0
-        ).astype(np.float32, copy=False)
+        X_1 = np.zeros(
+            (self.num_source_slots + 1,) + sources.shape[1:],
+            dtype=np.float32,
+        )
+        X_1[:K] = sources
+        X_1[-1] = residual
+
+        slot_mask = np.zeros(self.num_source_slots + 1, dtype=np.bool_)
+        slot_mask[:K] = True
+        slot_mask[-1] = True
 
         if self.returns_snr:
-            snrs = np.asarray(self.snr[waveform_indices], dtype=np.float32)
-            return mixture, X_1, K, snrs
+            snrs = np.zeros(self.num_source_slots, dtype=np.float32)
+            snrs[:K] = np.asarray(self.snr[waveform_indices], dtype=np.float32)
+            return mixture, X_1, K, slot_mask, snrs
 
         if self.return_params:
             params = self._build_padded_params(waveform_indices, K)
-            return mixture, X_1, K, params 
+            return mixture, X_1, K, slot_mask, params
 
-        return mixture, X_1, K  
+        return mixture, X_1, K, slot_mask
 
 
 class TrainDataset(GalacticBinariesDataset):
@@ -499,12 +511,13 @@ if __name__ == "__main__":
     )
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-    for batch_idx, (mixture, X_1, K, snrs) in enumerate(train_loader):
+    for batch_idx, (mixture, X_1, K, slot_mask, snrs) in enumerate(train_loader):
         print(f"Batch {batch_idx}:")
         print(f"  mixture shape: {mixture.shape}")
         print(f"  X_1 shape: {X_1.shape}")
         print(f"  K shape: {K.shape}")
         print(f"  K values: {K}")
+        print(f"  slot mask: {slot_mask}")
         print(f"  snrs shape: {snrs.shape}")
         print(f"  SNR values: {snrs}")
 

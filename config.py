@@ -31,7 +31,7 @@ SPLIT_SEED = 2027
 # Training Hyperparameters 
 
 MAX_K = 2
-CONSTANT_K = 2
+CONSTANT_K = False
 BATCH_SIZE = 480
 WEIGHT_DECAY = 1e-4
 NB_EPOCHS = 30
