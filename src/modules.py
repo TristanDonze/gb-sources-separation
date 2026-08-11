@@ -5,6 +5,8 @@ from torch.nn.functional import scaled_dot_product_attention
 import math
 from collections import OrderedDict
 
+from src.masking import mask_slots
+
 class PermutedLayerNorm(nn.Module):
     def __init__(self, normalized_shape):
         super().__init__()
@@ -134,7 +136,7 @@ class FrequencySelfAttention(nn.Module):
         self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, gamma, beta):
+    def forward(self, x, gamma, beta, slot_mask):
         B, L, F, D = x.shape # B = Batch Size, L = Number of Slots, F = Number of frequency bins, D = dim_model
         assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x_dim"
 
@@ -158,7 +160,7 @@ class FrequencySelfAttention(nn.Module):
         attn_out = attn_out.transpose(2, 3).reshape(B, L, F, self.dim_model)
         out = self.out_proj(attn_out)
 
-        return x + self.dropout(out)
+        return mask_slots(x + self.dropout(out), slot_mask)
 
 class SlotSelfAttention(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout : float = 0.1):
@@ -175,7 +177,7 @@ class SlotSelfAttention(nn.Module):
         self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, gamma, beta):
+    def forward(self, x, gamma, beta, slot_mask):
         B, L, F, D = x.shape
         assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x dim"
 
@@ -195,6 +197,7 @@ class SlotSelfAttention(nn.Module):
             query = q, 
             key = k,
             value = v,
+            attn_mask=slot_mask[:, None, None, None, :],
             dropout_p = dropout
         ) # shape : (B, L, n_heads, F, head_dim)
 
@@ -202,7 +205,7 @@ class SlotSelfAttention(nn.Module):
         out = self.out_proj(attn_out)
         out = out.permute(0, 2, 1, 3)
 
-        return x + self.dropout(out)
+        return mask_slots(x + self.dropout(out), slot_mask)
 
 class CrossAttentionToMixture(nn.Module):
     def __init__(self, dim_model: int = 256, n_heads: int = 4, dropout : float = 0.1):
@@ -220,7 +223,7 @@ class CrossAttentionToMixture(nn.Module):
         self.x_norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.y_norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
-    def forward(self, x, y, gamma, beta):
+    def forward(self, x, y, gamma, beta, slot_mask):
         # x: (B, L, F, D)
         # y: (B, F, D)
 
@@ -257,7 +260,7 @@ class CrossAttentionToMixture(nn.Module):
 
         out = self.out_proj(attn_out)
 
-        return x + self.dropout(out)
+        return mask_slots(x + self.dropout(out), slot_mask)
 
 class FeedForward(nn.Module):
     def __init__(
@@ -279,10 +282,10 @@ class FeedForward(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, gamma, beta):
+    def forward(self, x, gamma, beta, slot_mask):
         x_norm = self.norm(x)
         x_norm = x_norm * (1 + gamma) + beta
-        return x + self.dropout(self.ffn(x_norm))
+        return mask_slots(x + self.dropout(self.ffn(x_norm)), slot_mask)
 
 class AxialSeparatorBlock(nn.Module):
     def __init__(
@@ -320,12 +323,12 @@ class AxialSeparatorBlock(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, x, y, t_emb):
+    def forward(self, x, y, t_emb, slot_mask):
         gamma, beta = self.film(t_emb)
-        x = self.freq_attn(x, gamma, beta)
-        x = self.slot_attn(x, gamma, beta)
-        x = self.cross_attn(x, y, gamma, beta)
-        x = self.ffn(x, gamma, beta)
+        x = self.freq_attn(x, gamma, beta, slot_mask)
+        x = self.slot_attn(x, gamma, beta, slot_mask)
+        x = self.cross_attn(x, y, gamma, beta, slot_mask)
+        x = self.ffn(x, gamma, beta, slot_mask)
         return x
     
 if __name__ == "__main__":
@@ -340,21 +343,22 @@ if __name__ == "__main__":
     gamma, beta = film(t_emb)
 
     freq_attn = FrequencySelfAttention()
-    out_freq = freq_attn(h, gamma, beta)
+    slot_mask = torch.ones(B, L, dtype=torch.bool)
+
+    out_freq = freq_attn(h, gamma, beta, slot_mask)
     print(f"out_freq.shape: {out_freq.shape}")
 
     slot_attn = SlotSelfAttention()
-    out_slot = slot_attn(h, gamma, beta)
+    out_slot = slot_attn(h, gamma, beta, slot_mask)
     print(f"out_slot.shape: {out_slot.shape}")
 
     cross_attn = CrossAttentionToMixture()
-    out_cross = cross_attn(h, y, gamma, beta)
+    out_cross = cross_attn(h, y, gamma, beta, slot_mask)
     print(f"out_cross.shape: {out_cross.shape}")
 
 
     block_1 = AxialSeparatorBlock()
     nb_params = sum(p.numel() for p in block_1.parameters() if p.requires_grad)
     print(f"nb_params : {nb_params}")
-    out_1 = block_1(h, y, t_emb)
+    out_1 = block_1(h, y, t_emb, slot_mask)
     print(f"out_1 shape: {out_1.shape}")
-
