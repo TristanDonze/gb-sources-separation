@@ -133,6 +133,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "epochs": NB_EPOCHS,
         "train_loss": train_criterion.__class__.__name__,
         "source_permutation": "PIT at t=0",
+        "max_k": MAX_K,
+        "constant_k": CONSTANT_K,
     }
     aim_run["dataset"] = {
         "dataset_path": str(dataset_path),
@@ -152,6 +154,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     val_residual_losses = []
     val_nmse_sources = []
     val_nmse_source_dbs = []
+    val_metrics_by_k = []
     best_val_loss = float("inf")
     best_val_loss_epoch = 0
     min_lr_reached_epoch = None
@@ -166,6 +169,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             val_residual_losses,
             val_nmse_sources,
             val_nmse_source_dbs,
+            val_metrics_by_k,
             best_val_loss,
             best_val_loss_epoch,
             last_completed_epoch,
@@ -185,7 +189,14 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             device,
             timing=ENABLE_TIMING,
         )
-        val_loss, val_source_loss, val_residual_loss, val_nmse_source, val_nmse_source_db = evaluate(
+        (
+            val_loss,
+            val_source_loss,
+            val_residual_loss,
+            val_nmse_source,
+            val_nmse_source_db,
+            epoch_metrics_by_k,
+        ) = evaluate(
             model,
             val_loader,
             val_criteria,
@@ -203,6 +214,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         val_residual_losses.append(val_residual_loss)
         val_nmse_sources.append(val_nmse_source)
         val_nmse_source_dbs.append(val_nmse_source_db)
+        val_metrics_by_k.append(epoch_metrics_by_k)
 
         scheduler.step(val_loss)
 
@@ -279,6 +291,23 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             split="val",
             granularity="epoch",
         )
+        for k, metrics in sorted(epoch_metrics_by_k.items()):
+            for metric_name, aim_name in (
+                ("loss", "Validation Reconstruction Loss"),
+                ("source_mse", "Validation Reconstruction Source Loss"),
+                ("residual_mse", "Validation Reconstruction Residual Loss"),
+                ("source_nmse", "Validation Reconstruction Source NMSE"),
+                ("source_nmse_db", "Validation Reconstruction Source NMSE (dB)"),
+            ):
+                track_metric(
+                    aim_name,
+                    metrics[metric_name],
+                    step=aim_epoch,
+                    epoch=aim_epoch,
+                    split="val",
+                    granularity="epoch",
+                    source_count=k,
+                )
         track_metric(
             "learning_rate",
             optimizer.param_groups[0]["lr"],
@@ -293,6 +322,12 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             f" - Train Velocity MSE: Source: {train_source_loss:.4f}, Residual: {train_residual_loss:.4f}\n"
             f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
             f" - Validation Source NMSE: {val_nmse_source:.4f} (dB: {val_nmse_source_db:.4f})\n"
+            + "".join(
+                f" - K={k}: MSE={metrics['loss']:.4f}, "
+                f"NMSE={metrics['source_nmse']:.4f} "
+                f"({metrics['source_nmse_db']:.4f} dB)\n"
+                for k, metrics in sorted(epoch_metrics_by_k.items())
+            )
         )
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -317,6 +352,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 val_residual_losses,
                 val_nmse_sources,
                 val_nmse_source_dbs,
+                val_metrics_by_k,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,
@@ -335,6 +371,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 val_residual_losses,
                 val_nmse_sources,
                 val_nmse_source_dbs,
+                val_metrics_by_k,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,
