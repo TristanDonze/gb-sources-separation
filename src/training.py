@@ -51,11 +51,13 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
             X_0 = build_initial_state(mixture, X_1, K, slot_mask)
 
         with timer.measure("pet_assignment"):
+            model.eval()
             with torch.no_grad():
                 t_0 = torch.zeros(B, device=mixture.device, dtype=mixture.dtype)
                 v_0 = model(X_0, t_0, mixture, K, slot_mask)
                 assignment = criterion.find_assignment(v_0, X_0, X_1, slot_mask)
                 aligned_X_1 = criterion.align_targets(X_1, assignment, slot_mask)
+            model.train()
 
         with timer.measure("prepare"):
             t = torch.rand(B, device=mixture.device)
