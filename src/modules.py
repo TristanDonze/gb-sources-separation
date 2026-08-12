@@ -136,6 +136,13 @@ class FrequencySelfAttention(nn.Module):
         self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
 
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        nn.init.xavier_uniform_(self.qkv_proj.weight)
+        nn.init.zeros_(self.qkv_proj.bias)
+        nn.init.zeros_(self.out_proj.bias)
+
     def forward(self, x, gamma, beta, slot_mask):
         B, L, F, D = x.shape # B = Batch Size, L = Number of Slots, F = Number of frequency bins, D = dim_model
         assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x_dim"
@@ -176,6 +183,13 @@ class SlotSelfAttention(nn.Module):
 
         self.norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
+
+        self._reset_parameters()
+        
+    def _reset_parameters(self):
+        nn.init.xavier_uniform_(self.qkv_proj.weight)
+        nn.init.zeros_(self.qkv_proj.bias)
+        nn.init.zeros_(self.out_proj.bias)
 
     def forward(self, x, gamma, beta, slot_mask):
         B, L, F, D = x.shape
@@ -223,6 +237,19 @@ class CrossAttentionToMixture(nn.Module):
         self.x_norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.y_norm = nn.RMSNorm(dim_model, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        bound = math.sqrt(6.0 / (4.0 * self.dim_model))
+
+        nn.init.uniform_(self.query_proj.weight, -bound, bound)
+        nn.init.uniform_(self.kv_proj.weight, -bound, bound)
+
+        nn.init.zeros_(self.query_proj.bias)
+        nn.init.zeros_(self.kv_proj.bias)
+        nn.init.zeros_(self.out_proj.bias)
+
     def forward(self, x, y, gamma, beta, slot_mask):
         # x: (B, L, F, D)
         # y: (B, F, D)
