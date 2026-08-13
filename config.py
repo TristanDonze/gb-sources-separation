@@ -28,6 +28,10 @@ SEED_TRAIN = 42
 SEED_VAL = 0
 SPLIT_SEED = 2027
 
+# Model Hyperparameters
+
+N_BLOCKS = 4
+
 # Training Hyperparameters 
 
 MAX_K = 2

@@ -35,6 +35,8 @@ from config import (
     SEED_TRAIN,
     SEED_VAL,
 
+    N_BLOCKS,
+
     MAX_K,
     CONSTANT_K,
     BATCH_SIZE,
@@ -64,7 +66,10 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     logger.info("Source permutation: PIT at t=0, fixed along each training path")
 
 
-    model = FlowSeparator(max_k=MAX_K).to(device)
+    model = FlowSeparator(
+        max_k=MAX_K,
+        n_blocks=N_BLOCKS,
+    ).to(device)
     logger.info(f"Total number of parameters: {sum(p.numel() for p in model.parameters())}")
     logger.info("Model architecture:")
     for name, module in model.named_modules():
