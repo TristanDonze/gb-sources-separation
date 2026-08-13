@@ -42,7 +42,7 @@ N_BLOCKS = 6
 
 MAX_K = 5
 CONSTANT_K = False
-BATCH_SIZE = 1024
+BATCH_SIZE = 512
 WEIGHT_DECAY = 1e-4
 NB_EPOCHS = 50
 ENABLE_TIMING = False  # Synchronizes CUDA stages; disable for maximum throughput.
