@@ -9,10 +9,16 @@ large_dataset_path = Path("/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_datase
 huge_dataset_path = Path("/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_dataset/dataset_10M_uniform_SNR_10_100/dataset.hdf5")
 
 # Medium Config
-dataset_path = medium_dataset_path
+# dataset_path = medium_dataset_path
+# TRAIN_SIZE = 0.8
+# MAX_SAMPLES_TRAIN = 400_000
+# MAX_SAMPLES_VAL = 10_000
+
+# Large Config
+dataset_path = large_dataset_path
 TRAIN_SIZE = 0.8
-MAX_SAMPLES_TRAIN = 400_000
-MAX_SAMPLES_VAL = 10_000
+MAX_SAMPLES_TRAIN = 2_500_000 # Count 500_000 mixtures * MAX_K = 5
+MAX_SAMPLES_VAL = 50_000
 
 # Huge Config
 # dataset_path = huge_dataset_path
@@ -30,15 +36,15 @@ SPLIT_SEED = 2027
 
 # Model Hyperparameters
 
-N_BLOCKS = 4
+N_BLOCKS = 6
 
 # Training Hyperparameters 
 
-MAX_K = 2
+MAX_K = 5
 CONSTANT_K = False
-BATCH_SIZE = 480
+BATCH_SIZE = 1024
 WEIGHT_DECAY = 1e-4
-NB_EPOCHS = 30
+NB_EPOCHS = 50
 ENABLE_TIMING = False  # Synchronizes CUDA stages; disable for maximum throughput.
 
 # Scheduler : 
