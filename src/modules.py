@@ -130,8 +130,6 @@ class FrequencySelfAttention(nn.Module):
 
         self.head_dim = dim_model // n_heads
 
-        self.film = FiLM(dim_model)
-
         self.qkv_proj = nn.Linear(dim_model, dim_model * 3)
         self.out_proj = nn.Linear(dim_model, dim_model)
         
@@ -145,11 +143,9 @@ class FrequencySelfAttention(nn.Module):
         nn.init.zeros_(self.qkv_proj.bias)
         nn.init.zeros_(self.out_proj.bias)
 
-    def forward(self, x, t_emb, slot_mask):
+    def forward(self, x, gamma, beta, slot_mask):
         B, L, F, D = x.shape # B = Batch Size, L = Number of Slots, F = Number of frequency bins, D = dim_model
         assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x_dim"
-
-        gamma, beta = self.film(t_emb)
 
         x_norm = self.norm(x)
         x_norm = x_norm * (1 + gamma) + beta
@@ -182,8 +178,6 @@ class SlotSelfAttention(nn.Module):
 
         self.head_dim = dim_model // n_heads
 
-        self.film = FiLM(dim_model)
-
         self.qkv_proj = nn.Linear(dim_model, dim_model * 3)
         self.out_proj = nn.Linear(dim_model, dim_model)
 
@@ -197,11 +191,9 @@ class SlotSelfAttention(nn.Module):
         nn.init.zeros_(self.qkv_proj.bias)
         nn.init.zeros_(self.out_proj.bias)
 
-    def forward(self, x, t_emb, slot_mask):
+    def forward(self, x, gamma, beta, slot_mask):
         B, L, F, D = x.shape
         assert D == self.dim_model, f"{self.__class__.__name__}.dim_model != x dim"
-
-        gamma, beta = self.film(t_emb)
 
         x_norm = self.norm(x)
         x_norm = x_norm * (1 + gamma) + beta
@@ -238,8 +230,6 @@ class CrossAttentionToMixture(nn.Module):
 
         self.head_dim = dim_model // n_heads
 
-        self.film = FiLM(dim_model)
-
         self.query_proj = nn.Linear(dim_model, dim_model)
         self.kv_proj = nn.Linear(dim_model, 2 * dim_model)
         self.out_proj = nn.Linear(dim_model, dim_model)
@@ -260,7 +250,7 @@ class CrossAttentionToMixture(nn.Module):
         nn.init.zeros_(self.kv_proj.bias)
         nn.init.zeros_(self.out_proj.bias)
 
-    def forward(self, x, y, t_emb, slot_mask):
+    def forward(self, x, y, gamma, beta, slot_mask):
         # x: (B, L, F, D)
         # y: (B, F, D)
 
@@ -271,8 +261,6 @@ class CrossAttentionToMixture(nn.Module):
         assert Fy == F
         assert D == self.dim_model
         assert Dy == self.dim_model
-
-        gamma, beta = self.film(t_emb)
 
         x_norm = self.x_norm(x)
         x_norm = x_norm * (1 + gamma) + beta
@@ -310,8 +298,6 @@ class FeedForward(nn.Module):
     ):
         super().__init__()
 
-        self.film = FiLM(dim_model)
-
         self.norm = nn.RMSNorm(dim_model, eps=1e-6)
 
         self.ffn = nn.Sequential(
@@ -323,8 +309,7 @@ class FeedForward(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, t_emb, slot_mask):
-        gamma, beta = self.film(t_emb)
+    def forward(self, x, gamma, beta, slot_mask):
         x_norm = self.norm(x)
         x_norm = x_norm * (1 + gamma) + beta
         return mask_slots(x + self.dropout(self.ffn(x_norm)), slot_mask)
@@ -338,6 +323,8 @@ class AxialSeparatorBlock(nn.Module):
         dropout: float = 0.1,
     ):
         super().__init__()
+
+        self.film = FiLM(dim_model)
 
         self.freq_attn = FrequencySelfAttention(
             dim_model=dim_model,
@@ -364,10 +351,11 @@ class AxialSeparatorBlock(nn.Module):
         )
 
     def forward(self, x, y, t_emb, slot_mask):
-        x = self.freq_attn(x, t_emb, slot_mask)
-        x = self.slot_attn(x, t_emb, slot_mask)
-        x = self.cross_attn(x, y, t_emb, slot_mask)
-        x = self.ffn(x, t_emb, slot_mask)
+        gamma, beta = self.film(t_emb)
+        x = self.freq_attn(x, gamma, beta, slot_mask)
+        x = self.slot_attn(x, gamma, beta, slot_mask)
+        x = self.cross_attn(x, y, gamma, beta, slot_mask)
+        x = self.ffn(x, gamma, beta, slot_mask)
         return x
     
 if __name__ == "__main__":
@@ -378,18 +366,21 @@ if __name__ == "__main__":
     print(f"y shape: {y.shape}")
     t_emb = torch.randn(B, D)
 
+    film = FiLM()
+    gamma, beta = film(t_emb)
+
     freq_attn = FrequencySelfAttention()
     slot_mask = torch.ones(B, L, dtype=torch.bool)
 
-    out_freq = freq_attn(h, t_emb, slot_mask)
+    out_freq = freq_attn(h, gamma, beta, slot_mask)
     print(f"out_freq.shape: {out_freq.shape}")
 
     slot_attn = SlotSelfAttention()
-    out_slot = slot_attn(h, t_emb, slot_mask)
+    out_slot = slot_attn(h, gamma, beta, slot_mask)
     print(f"out_slot.shape: {out_slot.shape}")
 
     cross_attn = CrossAttentionToMixture()
-    out_cross = cross_attn(h, y, t_emb, slot_mask)
+    out_cross = cross_attn(h, y, gamma, beta, slot_mask)
     print(f"out_cross.shape: {out_cross.shape}")
 
 
