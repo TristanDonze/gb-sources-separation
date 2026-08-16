@@ -36,14 +36,13 @@ SPLIT_SEED = 2027
 
 # Model Hyperparameters
 
+MAX_K = 5
+CONSTANT_K = False
 N_BLOCKS = 4
+RESIDUAL_WEIGHT = 0.00 # need to try 0.0 and 0.75 after
 
 # Training Hyperparameters 
 
-
-MAX_K = 5
-CONSTANT_K = False
-RESIDUAL_WEIGHT = 0.00 # need to try 0.0 and 0.75 after
 BATCH_SIZE = 512
 WEIGHT_DECAY = 1e-4
 NB_EPOCHS = 50
