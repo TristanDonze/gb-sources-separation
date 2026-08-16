@@ -36,7 +36,7 @@ SPLIT_SEED = 2027
 
 # Model Hyperparameters
 
-N_BLOCKS = 6
+N_BLOCKS = 4
 
 # Training Hyperparameters 
 
