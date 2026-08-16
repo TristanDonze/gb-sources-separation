@@ -37,6 +37,7 @@ from config import (
 
     MAX_K,
     CONSTANT_K,
+    RESIDUAL_WEIGHT,
     BATCH_SIZE,
     WEIGHT_DECAY,
     NB_EPOCHS,
@@ -58,7 +59,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     device = get_device()
     logger.info(f"Using device: {device}")
 
-    train_criterion = FlowMatchingPET_DBNormalizedLoss(residual_weight=1.0, eps=1e-8)
+    train_criterion = FlowMatchingPET_DBNormalizedLoss(residual_weight=RESIDUAL_WEIGHT, eps=1e-8)
     val_criteria = (ReconstructionPIT_MSELoss(), ReconstructionPIT_NMSELoss())
     logger.info(f"Training criterion: {train_criterion.__class__.__name__}")
     logger.info("Source permutation: PIT at t=0, fixed along each training path")
@@ -123,6 +124,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     aim_run["hparams"] = {
         "fix_all_seeds": FIX_ALL_SEEDS,
         "seed": SEED if FIX_ALL_SEEDS else None,
+        "residual_weight": RESIDUAL_WEIGHT,
         "batch_size": BATCH_SIZE,
         "learning_rate": LR,
         "learning_rate_min": LR_MIN,
