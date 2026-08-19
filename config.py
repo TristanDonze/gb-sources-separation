@@ -18,12 +18,12 @@ huge_dataset_path = Path("/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_dataset
 dataset_path = large_dataset_path
 TRAIN_SIZE = 0.8
 MAX_SAMPLES_TRAIN = 2_500_000 # Count 500_000 mixtures * MAX_K = 5
-MAX_SAMPLES_VAL = 50_000
+MAX_SAMPLES_VAL = 50_000 # Count 5K mixtures * MAX_K = 5
 
 # Huge Config
 # dataset_path = huge_dataset_path
 # TRAIN_SIZE = 0.5
-# MAX_SAMPLES_TRAIN = 3_000_000
+# MAX_SAMPLES_TRAIN = 5_000_000
 # MAX_SAMPLES_VAL = 50_000
 
 SPLIT_STRATEGY = "snr" # "random" or "snr"
@@ -39,7 +39,7 @@ SPLIT_SEED = 2027
 MAX_K = 5
 CONSTANT_K = False
 N_BLOCKS = 4
-RESIDUAL_WEIGHT = 1.00 # need to try 0.0 and 0.75 after
+RESIDUAL_WEIGHT = 1.00
 
 # Training Hyperparameters 
 
