@@ -121,7 +121,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         val_dataset,
         batch_size=BATCH_SIZE,
         num_workers=0,
-        shuffle=True,
+        shuffle=False,
         generator=val_generator,
         worker_init_fn=worker_init_fn,
     )
