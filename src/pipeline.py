@@ -330,8 +330,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
             f" - Validation Source NMSE: {val_nmse_source:.4f} (dB: {val_nmse_source_db:.4f})\n"
             + "".join(
-                f" - K={k}: MSE={metrics['loss']:.4f}, "
-                f"NMSE={metrics['source_nmse']:.4f} "
+                f" - K={k}: MSE={metrics['loss']:.4f} (Source: {metrics['source_mse']}, Residual: {metrics['residual_mse']}) "
+                f"NMSE Source ={metrics['source_nmse']:.4f} "
                 f"({metrics['source_nmse_db']:.4f} dB)\n"
                 for k, metrics in sorted(epoch_metrics_by_k.items())
             )
