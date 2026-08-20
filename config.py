@@ -44,7 +44,7 @@ RESIDUAL_WEIGHT = 1.00
 # Training Hyperparameters 
 
 BATCH_SIZE = 512
-WEIGHT_DECAY = 1e-4
+WEIGHT_DECAY = 1e-3
 NB_EPOCHS = 50
 ENABLE_TIMING = False  # Synchronizes CUDA stages; disable for maximum throughput.
 
@@ -54,6 +54,8 @@ LR = 1e-3
 LR_MIN = 1e-6
 FACTOR = 0.5
 PATIENCE = 3
+
+LR_DECAY_EPOCHS = 20
 
 # Validation Hyperparameters
 

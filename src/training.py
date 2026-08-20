@@ -28,7 +28,7 @@ def build_initial_state(mixture, X_1, K, slot_mask, generator=None):
 
     return S_bar + Z
 
-def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True):
+def train_one_epoch(model, dataloader, optimizer, scheduler, criterion, device, timing=True):
     model.train()
     total_loss = 0.0
     total_source_mse = 0.0
@@ -80,6 +80,7 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            scheduler.step()
 
         loss_value = loss.item()
         source_count = int(K.sum().item())
@@ -133,5 +134,10 @@ if __name__ == "__main__":
     criterion = FlowMatchingPET_DBNormalizedLoss()
     model = FlowSeparator(max_k=10).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=50 * len(dataloader),
+        eta_min=1e-6,
+    )
 
-    train_one_epoch(model, dataloader, optimizer, criterion, device)
+    train_one_epoch(model, dataloader, optimizer, scheduler, criterion, device)

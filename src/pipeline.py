@@ -1,4 +1,5 @@
 import logging
+import math
 import torch
 from torch.utils.data import DataLoader
 
@@ -48,6 +49,7 @@ from config import (
     LR_MIN,
     FACTOR,
     PATIENCE,
+    LR_DECAY_EPOCHS,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,13 +79,13 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         logger.info(f"  {name}: {module}")
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer,
-        mode="min",
-        factor=FACTOR,
-        patience=PATIENCE,
-        min_lr=LR_MIN,
-    )
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer=optimizer,
+    #     mode="min",
+    #     factor=FACTOR,
+    #     patience=PATIENCE,
+    #     min_lr=LR_MIN,
+    # )
 
     train_dataset, val_dataset = create_train_val_datasets(
         dataset_path,
@@ -126,6 +128,20 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         worker_init_fn=worker_init_fn,
     )
 
+    decay_steps = LR_DECAY_EPOCHS * len(train_loader)
+    min_factor = LR_MIN / LR
+
+    def cosine_then_constant(step):
+        progress = min(step / decay_steps, 1.0)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_factor + (1.0 - min_factor) * cosine
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=cosine_then_constant,
+    )
+    
+
     aim_run["hparams"] = {
         "fix_all_seeds": FIX_ALL_SEEDS,
         "seed": SEED if FIX_ALL_SEEDS else None,
@@ -133,9 +149,10 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "batch_size": BATCH_SIZE,
         "learning_rate": LR,
         "learning_rate_min": LR_MIN,
-        "scheduler": "ReduceLROnPlateau",
-        "scheduler_factor": FACTOR,
-        "scheduler_patience": PATIENCE,
+        "scheduler": "CosineThenConstant",
+        "scheduler_decay_epochs": LR_DECAY_EPOCHS,
+        # "scheduler_factor": FACTOR,
+        # "scheduler_patience": PATIENCE,
         "weight_decay": WEIGHT_DECAY,
         "epochs": NB_EPOCHS,
         "train_loss": train_criterion.__class__.__name__,
@@ -192,6 +209,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             model,
             train_loader,
             optimizer,
+            scheduler,
             train_criterion,
             device,
             timing=ENABLE_TIMING,
@@ -223,7 +241,6 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         val_nmse_source_dbs.append(val_nmse_source_db)
         val_metrics_by_k.append(epoch_metrics_by_k)
 
-        scheduler.step(val_loss)
 
         aim_epoch = epoch + 1
         lr_at_min = all(
@@ -330,8 +347,10 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
             f" - Validation Source NMSE: {val_nmse_source:.4f} (dB: {val_nmse_source_db:.4f})\n"
             + "".join(
-                f" - K={k}: MSE={metrics['loss']:.4f} (Source: {metrics['source_mse']}, Residual: {metrics['residual_mse']}) "
-                f"NMSE Source ={metrics['source_nmse']:.4f} "
+                f" - K={k}: Reconstruction MSE={metrics['loss']:.4f} "
+                f"(Source={metrics['source_mse']:.4f}, "
+                f"Residual={metrics['residual_mse']:.4f}); "
+                f"Source NMSE={metrics['source_nmse']:.4f} "
                 f"({metrics['source_nmse_db']:.4f} dB)\n"
                 for k, metrics in sorted(epoch_metrics_by_k.items())
             )
