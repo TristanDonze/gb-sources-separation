@@ -22,6 +22,7 @@ class GalacticBinariesDataset(Dataset):
         returns_snr: bool = False,
         deterministic: bool = False,
         seed: int | None = None,
+        k_sampling_probs=None,
     ):
         self.waveforms = waveforms
         self.attr_names = list(params_dict.keys())
@@ -46,6 +47,9 @@ class GalacticBinariesDataset(Dataset):
         self.deterministic = deterministic
         self.seed = seed
         self.rng = np.random.default_rng(seed)
+        self.k_sampling_probs = self._validate_k_sampling_probs(
+            k_sampling_probs, max_K
+        )
 
         if constant_K is True:
             raise ValueError("constant_K cannot be True. It must be either False or an integer value.")
@@ -87,12 +91,41 @@ class GalacticBinariesDataset(Dataset):
 
         return np.sort(indices)
 
+    @staticmethod
+    def _validate_k_sampling_probs(k_sampling_probs, max_K):
+        if k_sampling_probs is None:
+            return None
+
+        probabilities = np.asarray(k_sampling_probs, dtype=np.float64)
+        if probabilities.shape != (max_K,):
+            raise ValueError(
+                "k_sampling_probs must contain exactly max_K probabilities "
+                f"(expected {max_K}, got {probabilities.size})"
+            )
+        if not np.all(np.isfinite(probabilities)):
+            raise ValueError("k_sampling_probs must contain only finite values")
+        if np.any(probabilities < 0):
+            raise ValueError("k_sampling_probs cannot contain negative values")
+        if not np.isclose(probabilities.sum(), 1.0, rtol=1e-6, atol=1e-8):
+            raise ValueError(
+                "k_sampling_probs must sum to 1 "
+                f"(got {probabilities.sum():.8f})"
+            )
+        return probabilities
+
     def __len__(self):
         return self.length
 
     def _sample_k(self, idx):
         if self.constant_K is not False:
             return int(self.constant_K)
+        if self.k_sampling_probs is not None:
+            return int(
+                self.rng.choice(
+                    np.arange(1, self.max_K + 1),
+                    p=self.k_sampling_probs,
+                )
+            )
         return int(self.rng.integers(1, self.max_K + 1))
 
     def _sample_indices_for_k(self, k, idx):
@@ -245,6 +278,7 @@ class TrainDataset(GalacticBinariesDataset):
         returns_snr: bool = False,
         deterministic: bool = False,
         seed: int | None = None,
+        k_sampling_probs=None,
     ):
         super().__init__(
             waveforms=waveforms,
@@ -258,6 +292,7 @@ class TrainDataset(GalacticBinariesDataset):
             returns_snr=returns_snr,
             deterministic=deterministic,
             seed=seed,
+            k_sampling_probs=k_sampling_probs,
         )
 
         # self.random_global_scale = random_global_scale
@@ -408,6 +443,7 @@ def create_train_val_datasets(
     snr_bin_width : float = 1.0,
     seed_train : int = 42,
     seed_val : int = 0,
+    k_sampling_probs_train=None,
 ):
     with h5py.File(dataset_path, "r") as f:
         logger.info(f"Loading waveforms from {dataset_path}...")
@@ -453,6 +489,7 @@ def create_train_val_datasets(
         return_params=return_params,
         returns_snr=returns_snr,
         seed=seed_train,
+        k_sampling_probs=k_sampling_probs_train,
     ) if len(train_indices) > 0 else None
 
     val_dataset = ValidationDataset(

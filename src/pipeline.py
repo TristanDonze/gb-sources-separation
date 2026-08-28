@@ -40,6 +40,7 @@ from config import (
 
     MAX_K,
     CONSTANT_K,
+    K_TRAIN_PROBS,
     RESIDUAL_WEIGHT,
     BATCH_SIZE,
     WEIGHT_DECAY,
@@ -102,6 +103,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         split_strategy=SPLIT_STRATEGY,
         seed_train=SEED_TRAIN,
         seed_val=SEED_VAL,
+        k_sampling_probs_train=K_TRAIN_PROBS,
     )
 
     train_generator = (
@@ -159,6 +161,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "source_permutation": "PIT at t=0",
         "max_k": MAX_K,
         "constant_k": CONSTANT_K,
+        "k_train_probs": K_TRAIN_PROBS,
     }
     aim_run["dataset"] = {
         "dataset_path": str(dataset_path),

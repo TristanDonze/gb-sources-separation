@@ -17,7 +17,7 @@ huge_dataset_path = Path("/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_dataset
 # Large Config
 dataset_path = large_dataset_path
 TRAIN_SIZE = 0.8
-MAX_SAMPLES_TRAIN = 2_500_000 # Count 500_000 mixtures * MAX_K = 5
+MAX_SAMPLES_TRAIN = 1_000_000 # Count 500_000 mixtures * MAX_K = 5
 MAX_SAMPLES_VAL = 50_000 # Count 5K mixtures * MAX_K = 5
 
 # Huge Config
@@ -36,26 +36,27 @@ SPLIT_SEED = 2027
 
 # Model Hyperparameters
 
-MAX_K = 5
+MAX_K = 7
 CONSTANT_K = False
 N_BLOCKS = 6
 RESIDUAL_WEIGHT = 1.00
+K_TRAIN_PROBS = [0.07, 0.09, 0.11, 0.13, 0.16, 0.19, 0.25]
 
 # Training Hyperparameters 
 
-BATCH_SIZE = 512
-WEIGHT_DECAY = 1e-3
+BATCH_SIZE = 320
+WEIGHT_DECAY = 2e-3
 NB_EPOCHS = 50
 ENABLE_TIMING = False  # Synchronizes CUDA stages; disable for maximum throughput.
 
 # Scheduler : 
 
-LR = 1e-3
+LR = 7e-4
 LR_MIN = 1e-6
 FACTOR = 0.5
 PATIENCE = 3
 
-LR_DECAY_EPOCHS = 20
+LR_DECAY_EPOCHS = 50
 
 # Validation Hyperparameters
 
