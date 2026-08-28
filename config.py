@@ -38,7 +38,7 @@ SPLIT_SEED = 2027
 
 MAX_K = 5
 CONSTANT_K = False
-N_BLOCKS = 4
+N_BLOCKS = 6
 RESIDUAL_WEIGHT = 1.00
 
 # Training Hyperparameters 
