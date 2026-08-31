@@ -1,5 +1,4 @@
 import logging
-import math
 import torch
 from torch.utils.data import DataLoader
 
@@ -12,6 +11,7 @@ from src.losses import (
 )
 from src.training import train_one_epoch
 from src.validation import evaluate
+from src.scheduler import PolynomialDecayLR
 from src.utils import (
     get_device,
     load_checkpoint,
@@ -48,6 +48,7 @@ from config import (
     ENABLE_TIMING,
     LR,
     LR_MIN,
+    DROPOUT,
     FACTOR,
     PATIENCE,
     LR_DECAY_EPOCHS,
@@ -73,6 +74,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     model = FlowSeparator(
         max_k=MAX_K,
         n_blocks=N_BLOCKS,
+        dropout=DROPOUT,
     ).to(device)
     logger.info(f"Total number of parameters: {sum(p.numel() for p in model.parameters())}")
     logger.info("Model architecture:")
@@ -130,17 +132,13 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         worker_init_fn=worker_init_fn,
     )
 
-    decay_steps = LR_DECAY_EPOCHS * len(train_loader)
-    min_factor = LR_MIN / LR
+    total_steps = LR_DECAY_EPOCHS * len(train_loader)
 
-    def cosine_then_constant(step):
-        progress = min(step / decay_steps, 1.0)
-        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return min_factor + (1.0 - min_factor) * cosine
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
+    scheduler = PolynomialDecayLR(
         optimizer,
-        lr_lambda=cosine_then_constant,
+        total_steps=total_steps,
+        eta_min=LR_MIN,
+        power=3.0,
     )
     
 
@@ -151,7 +149,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "batch_size": BATCH_SIZE,
         "learning_rate": LR,
         "learning_rate_min": LR_MIN,
-        "scheduler": "CosineThenConstant",
+        "dropout": DROPOUT,
+        "scheduler": "PolynomialDecay",
         "scheduler_decay_epochs": LR_DECAY_EPOCHS,
         # "scheduler_factor": FACTOR,
         # "scheduler_patience": PATIENCE,
