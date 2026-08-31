@@ -51,6 +51,7 @@ class FlowSeparator(nn.Module):
         t_emb = self.t_emb(t) # (B, dim_model)
 
         h = x_tok + freq_emb[None, None, :, :] + type_emb[None, :, None, :] + k_emb[:, None, None, :]
+        y_tok = y_tok + freq_emb[None, :, :]
 
         for block in self.blocks:
             h = block(h, y_tok, t_emb, slot_mask) # (B, L, F, dim_model)
