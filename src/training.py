@@ -8,16 +8,35 @@ from src.timing import StageTimer
 logger = logging.getLogger(__name__)
 
 
-def build_initial_state(mixture, X_1, K, slot_mask, generator=None):
+def build_initial_state(mixture, X_1, K, slot_mask, nb_of_sampling=1, generator=None):
+    """Build one or more random initial states for every input mixture.
+
+    When ``nb_of_sampling > 1``, the returned batch is ordered by mixture, then
+    by sampling index, and has size ``B * nb_of_sampling``.
+    """
     B, L, _, _ = X_1.shape
 
     active_count = (K + 1).to(mixture.dtype)
     S_bar = mixture[:, None, :, :] / active_count[:, None, None, None]
     S_bar = S_bar.repeat(1, L, 1, 1)
+
+    if nb_of_sampling > 1:
+        S_bar = (
+            S_bar[:, None]
+            .expand(-1, nb_of_sampling, -1, -1, -1)
+            .reshape(B * nb_of_sampling, *S_bar.shape[1:])
+        )
+        slot_mask = (
+            slot_mask[:, None]
+            .expand(-1, nb_of_sampling, -1)
+            .reshape(B * nb_of_sampling, L)
+        )
+        active_count = active_count.repeat_interleave(nb_of_sampling)
+
     S_bar = mask_slots(S_bar, slot_mask)
 
     Z = torch.randn(
-        X_1.shape,
+        S_bar.shape,
         device=X_1.device,
         dtype=X_1.dtype,
         generator=generator,
