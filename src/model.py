@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from src.modules import ConvEncoder, TimeEmbedding, AxialSeparatorBlock
+from src.masking import mask_slots
 
 class FlowSeparator(nn.Module):
     def __init__(self, input_channels: int = 4, max_k: int = 2, n_blocks: int = 4, dim_model: int = 256, n_heads: int = 4, dim_feedforward: int = 512, dropout: float = 0.1):
@@ -25,12 +26,14 @@ class FlowSeparator(nn.Module):
                 x_t : torch.Tensor, 
                 t : torch.Tensor, 
                 y : torch.Tensor,
-                K : torch.Tensor,) -> torch.Tensor:
-        # X_t: (B, L, 4, F) where F = 128 and L = K + 1
+                K : torch.Tensor,
+                slot_mask: torch.Tensor,) -> torch.Tensor:
+        # X_t: (B, L, 4, F), with the residual in the last slot
         # t:   (B,) 
         # y:   (B, 4, F) where F = 128
         # K:   (B,) 
         B, L, C, F = x_t.shape
+        x_t = mask_slots(x_t, slot_mask)
         y_tok = self.mixture_encoder(y)  # (B, dim_model, F)
         y_tok = y_tok.permute(0, 2, 1)  # (B, F, dim_model)
 
@@ -48,14 +51,18 @@ class FlowSeparator(nn.Module):
         t_emb = self.t_emb(t) # (B, dim_model)
 
         h = x_tok + freq_emb[None, None, :, :] + type_emb[None, :, None, :] + k_emb[:, None, None, :]
+        y_tok = y_tok + freq_emb[None, :, :]
 
         for block in self.blocks:
-            h = block(h, y_tok, t_emb) # (B, L, F, dim_model)
+            h = block(h, y_tok, t_emb, slot_mask) # (B, L, F, dim_model)
 
         v_raw = self.out(h)               # (B, L, F, 4)
         v_raw = v_raw.permute(0, 1, 3, 2) # (B, L, 4, F)
 
-        v = v_raw - v_raw.mean(dim=1, keepdim=True)
+        v_raw = mask_slots(v_raw, slot_mask)
+        active_count = slot_mask.sum(dim=1, keepdim=True)[:, :, None, None]
+        active_mean = v_raw.sum(dim=1, keepdim=True) / active_count.to(v_raw.dtype)
+        v = mask_slots(v_raw - active_mean, slot_mask)
 
         return v
 
@@ -105,9 +112,10 @@ if __name__ == "__main__":
         X_t = interpolate_x(X_0, X_1, t)
         print(f"X_t shape : {X_t.shape}")
 
-        return X_t, t, y, K
+        slot_mask = torch.ones(B, L, dtype=torch.bool, device=device)
+        return X_t, t, y, K, slot_mask
 
-    X_t, t, y, K = generate_dummy_data(B, K_val, nb_of_channels, nb_of_freq_bins, dtype, device)
+    X_t, t, y, K, slot_mask = generate_dummy_data(B, K_val, nb_of_channels, nb_of_freq_bins, dtype, device)
 
     model = FlowSeparator(
         input_channels=nb_of_channels, 
@@ -119,7 +127,7 @@ if __name__ == "__main__":
         dropout=0.1
     ).to(device, dtype=dtype)
     
-    _ = model(X_t, t, y, K)
+    _ = model(X_t, t, y, K, slot_mask)
     torch.cuda.synchronize()
 
     with torch.profiler.profile(
@@ -129,6 +137,6 @@ if __name__ == "__main__":
         ],
         record_shapes=True,
     ) as prof:
-        out = model(X_t, t, y, K)
+        out = model(X_t, t, y, K, slot_mask)
         torch.cuda.synchronize()
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=15))

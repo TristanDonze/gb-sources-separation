@@ -11,6 +11,7 @@ from src.losses import (
 )
 from src.training import train_one_epoch
 from src.validation import evaluate
+from src.scheduler import PolynomialDecayLR
 from src.utils import (
     get_device,
     load_checkpoint,
@@ -35,8 +36,11 @@ from config import (
     SEED_TRAIN,
     SEED_VAL,
 
+    N_BLOCKS,
+
     MAX_K,
     CONSTANT_K,
+    K_TRAIN_PROBS,
     RESIDUAL_WEIGHT,
     BATCH_SIZE,
     WEIGHT_DECAY,
@@ -44,8 +48,10 @@ from config import (
     ENABLE_TIMING,
     LR,
     LR_MIN,
+    DROPOUT,
     FACTOR,
     PATIENCE,
+    LR_DECAY_EPOCHS,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +61,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     if FIX_ALL_SEEDS:
         seed_everything(SEED)
         logger.info(f"All random number generators seeded with: {SEED}")
-    
+
     device = get_device()
     logger.info(f"Using device: {device}")
 
@@ -65,20 +71,24 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     logger.info("Source permutation: PIT at t=0, fixed along each training path")
 
 
-    model = FlowSeparator(max_k=MAX_K).to(device)
+    model = FlowSeparator(
+        max_k=MAX_K,
+        n_blocks=N_BLOCKS,
+        dropout=DROPOUT,
+    ).to(device)
     logger.info(f"Total number of parameters: {sum(p.numel() for p in model.parameters())}")
     logger.info("Model architecture:")
     for name, module in model.named_modules():
         logger.info(f"  {name}: {module}")
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer,
-        mode="min",
-        factor=FACTOR,
-        patience=PATIENCE,
-        min_lr=LR_MIN,
-    )
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer=optimizer,
+    #     mode="min",
+    #     factor=FACTOR,
+    #     patience=PATIENCE,
+    #     min_lr=LR_MIN,
+    # )
 
     train_dataset, val_dataset = create_train_val_datasets(
         dataset_path,
@@ -95,6 +105,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         split_strategy=SPLIT_STRATEGY,
         seed_train=SEED_TRAIN,
         seed_val=SEED_VAL,
+        k_sampling_probs_train=K_TRAIN_PROBS,
     )
 
     train_generator = (
@@ -116,9 +127,18 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         val_dataset,
         batch_size=BATCH_SIZE,
         num_workers=0,
-        shuffle=True,
+        shuffle=False,
         generator=val_generator,
         worker_init_fn=worker_init_fn,
+    )
+
+    total_steps = LR_DECAY_EPOCHS * len(train_loader)
+
+    scheduler = PolynomialDecayLR(
+        optimizer,
+        total_steps=total_steps,
+        eta_min=LR_MIN,
+        power=3.0,
     )
 
     aim_run["hparams"] = {
@@ -128,13 +148,18 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "batch_size": BATCH_SIZE,
         "learning_rate": LR,
         "learning_rate_min": LR_MIN,
-        "scheduler": "ReduceLROnPlateau",
-        "scheduler_factor": FACTOR,
-        "scheduler_patience": PATIENCE,
+        "dropout": DROPOUT,
+        "scheduler": "PolynomialDecay",
+        "scheduler_decay_epochs": LR_DECAY_EPOCHS,
+        # "scheduler_factor": FACTOR,
+        # "scheduler_patience": PATIENCE,
         "weight_decay": WEIGHT_DECAY,
         "epochs": NB_EPOCHS,
         "train_loss": train_criterion.__class__.__name__,
         "source_permutation": "PIT at t=0",
+        "max_k": MAX_K,
+        "constant_k": CONSTANT_K,
+        "k_train_probs": K_TRAIN_PROBS,
     }
     aim_run["dataset"] = {
         "dataset_path": str(dataset_path),
@@ -154,6 +179,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
     val_residual_losses = []
     val_nmse_sources = []
     val_nmse_source_dbs = []
+    val_metrics_by_k = []
     best_val_loss = float("inf")
     best_val_loss_epoch = 0
     min_lr_reached_epoch = None
@@ -168,6 +194,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             val_residual_losses,
             val_nmse_sources,
             val_nmse_source_dbs,
+            val_metrics_by_k,
             best_val_loss,
             best_val_loss_epoch,
             last_completed_epoch,
@@ -183,11 +210,19 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             model,
             train_loader,
             optimizer,
+            scheduler,
             train_criterion,
             device,
             timing=ENABLE_TIMING,
         )
-        val_loss, val_source_loss, val_residual_loss, val_nmse_source, val_nmse_source_db = evaluate(
+        (
+            val_loss,
+            val_source_loss,
+            val_residual_loss,
+            val_nmse_source,
+            val_nmse_source_db,
+            epoch_metrics_by_k,
+        ) = evaluate(
             model,
             val_loader,
             val_criteria,
@@ -205,8 +240,8 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         val_residual_losses.append(val_residual_loss)
         val_nmse_sources.append(val_nmse_source)
         val_nmse_source_dbs.append(val_nmse_source_db)
+        val_metrics_by_k.append(epoch_metrics_by_k)
 
-        scheduler.step(val_loss)
 
         aim_epoch = epoch + 1
         lr_at_min = all(
@@ -281,6 +316,23 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             split="val",
             granularity="epoch",
         )
+        for k, metrics in sorted(epoch_metrics_by_k.items()):
+            for metric_name, aim_name in (
+                ("loss", "Validation Reconstruction Loss"),
+                ("source_mse", "Validation Reconstruction Source Loss"),
+                ("residual_mse", "Validation Reconstruction Residual Loss"),
+                ("source_nmse", "Validation Reconstruction Source NMSE"),
+                ("source_nmse_db", "Validation Reconstruction Source NMSE (dB)"),
+            ):
+                track_metric(
+                    aim_name,
+                    metrics[metric_name],
+                    step=aim_epoch,
+                    epoch=aim_epoch,
+                    split="val",
+                    granularity="epoch",
+                    source_count=k,
+                )
         track_metric(
             "learning_rate",
             optimizer.param_groups[0]["lr"],
@@ -295,6 +347,14 @@ def train(checkpoint_dir, load_checkpoint_path=None):
             f" - Train Velocity MSE: Source: {train_source_loss:.4f}, Residual: {train_residual_loss:.4f}\n"
             f" - Validation Loss: {val_loss:.4f} (Source: {val_source_loss:.4f}, Residual: {val_residual_loss:.4f})\n"
             f" - Validation Source NMSE: {val_nmse_source:.4f} (dB: {val_nmse_source_db:.4f})\n"
+            + "".join(
+                f" - K={k}: Reconstruction MSE={metrics['loss']:.4f} "
+                f"(Source={metrics['source_mse']:.4f}, "
+                f"Residual={metrics['residual_mse']:.4f}); "
+                f"Source NMSE={metrics['source_nmse']:.4f} "
+                f"({metrics['source_nmse_db']:.4f} dB)\n"
+                for k, metrics in sorted(epoch_metrics_by_k.items())
+            )
         )
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -319,6 +379,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 val_residual_losses,
                 val_nmse_sources,
                 val_nmse_source_dbs,
+                val_metrics_by_k,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,
@@ -337,6 +398,7 @@ def train(checkpoint_dir, load_checkpoint_path=None):
                 val_residual_losses,
                 val_nmse_sources,
                 val_nmse_source_dbs,
+                val_metrics_by_k,
                 best_val_loss,
                 best_val_loss_epoch,
                 epoch,

@@ -2,51 +2,81 @@ import logging
 
 import torch
 
+from src.masking import mask_slots
 from src.timing import StageTimer
 
 logger = logging.getLogger(__name__)
 
 
-def build_initial_state(mixture, X_1, generator=None):
+def build_initial_state(mixture, X_1, K, slot_mask, nb_of_sampling=1, generator=None):
+    """Build one or more random initial states for every input mixture.
+
+    When ``nb_of_sampling > 1``, the returned batch is ordered by mixture, then
+    by sampling index, and has size ``B * nb_of_sampling``.
+    """
     B, L, _, _ = X_1.shape
 
-    S_bar = mixture[:, None, :, :] / L
+    active_count = (K + 1).to(mixture.dtype)
+    S_bar = mixture[:, None, :, :] / active_count[:, None, None, None]
     S_bar = S_bar.repeat(1, L, 1, 1)
 
+    if nb_of_sampling > 1:
+        S_bar = (
+            S_bar[:, None]
+            .expand(-1, nb_of_sampling, -1, -1, -1)
+            .reshape(B * nb_of_sampling, *S_bar.shape[1:])
+        )
+        slot_mask = (
+            slot_mask[:, None]
+            .expand(-1, nb_of_sampling, -1)
+            .reshape(B * nb_of_sampling, L)
+        )
+        active_count = active_count.repeat_interleave(nb_of_sampling)
+
+    S_bar = mask_slots(S_bar, slot_mask)
+
     Z = torch.randn(
-        X_1.shape,
+        S_bar.shape,
         device=X_1.device,
         dtype=X_1.dtype,
         generator=generator,
     )
-    Z = Z - Z.mean(dim=1, keepdim=True)
+    Z = mask_slots(Z, slot_mask)
+    Z_mean = Z.sum(dim=1, keepdim=True) / active_count[:, None, None, None]
+    Z = mask_slots(Z - Z_mean, slot_mask)
 
     return S_bar + Z
 
-def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True):
+def train_one_epoch(model, dataloader, optimizer, scheduler, criterion, device, timing=True):
     model.train()
     total_loss = 0.0
     total_source_mse = 0.0
     total_residual_mse = 0.0
     timer = StageTimer(device, logger, prefix="Training", enabled=timing)
 
-    for mixture, X_1, K in timer.iter_batches(dataloader):
+    total_samples = 0
+    total_sources = 0
+
+    for mixture, X_1, K, slot_mask in timer.iter_batches(dataloader):
         B, L, _, _ = X_1.shape
 
         with timer.measure("to_device"):
             mixture = mixture.to(device)
             X_1 = X_1.to(device)
             K = K.to(device)
+            slot_mask = slot_mask.to(device)
 
         with timer.measure("prepare"):
-            X_0 = build_initial_state(mixture, X_1)
+            X_0 = build_initial_state(mixture, X_1, K, slot_mask)
 
         with timer.measure("pet_assignment"):
+            model.eval()
             with torch.no_grad():
                 t_0 = torch.zeros(B, device=mixture.device, dtype=mixture.dtype)
-                v_0 = model(X_0, t_0, mixture, K)
-                assignment = criterion.find_assignment(v_0, X_0, X_1)
-                aligned_X_1 = criterion.align_targets(X_1, assignment)
+                v_0 = model(X_0, t_0, mixture, K, slot_mask)
+                assignment = criterion.find_assignment(v_0, X_0, X_1, slot_mask)
+                aligned_X_1 = criterion.align_targets(X_1, assignment, slot_mask)
+            model.train()
 
         with timer.measure("prepare"):
             t = torch.rand(B, device=mixture.device)
@@ -55,7 +85,7 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
             X_t = (1 - t_view) * X_0 + t_view * aligned_X_1
 
         with timer.measure("model_forward"):
-            v = model(X_t, t, mixture, K)
+            v = model(X_t, t, mixture, K, slot_mask)
 
         with timer.measure("loss_backward_step"):
             loss, source_mse, residual_mse = criterion(
@@ -63,22 +93,27 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device, timing=True
                 X_0,
                 X_1,
                 assignment,
+                slot_mask,
             )
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            scheduler.step()
 
         loss_value = loss.item()
-        total_loss += loss_value
-        total_source_mse += source_mse.item()
-        total_residual_mse += residual_mse.item()
+        source_count = int(K.sum().item())
+        total_loss += loss_value * B
+        total_source_mse += source_mse.item() * source_count
+        total_residual_mse += residual_mse.item() * B
+        total_samples += B
+        total_sources += source_count
 
     timer.log()
 
-    avg_loss = total_loss / len(dataloader)
-    avg_source_mse = total_source_mse / len(dataloader)
-    avg_residual_mse = total_residual_mse / len(dataloader)
+    avg_loss = total_loss / total_samples
+    avg_source_mse = total_source_mse / total_sources
+    avg_residual_mse = total_residual_mse / total_samples
     
     return avg_loss, avg_source_mse, avg_residual_mse
 
@@ -88,7 +123,7 @@ if __name__ == "__main__":
     from src.model import FlowSeparator
     from src.dataset import create_train_val_datasets
     from torch.utils.data import DataLoader
-    from src.losses import FlowMatchingPIT_MSELoss
+    from src.losses import FlowMatchingPET_DBNormalizedLoss
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device : {device}")
@@ -115,8 +150,13 @@ if __name__ == "__main__":
     )
 
     dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-    criterion = FlowMatchingPIT_MSELoss()
-    model = FlowSeparator().to(device)
+    criterion = FlowMatchingPET_DBNormalizedLoss()
+    model = FlowSeparator(max_k=10).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=50 * len(dataloader),
+        eta_min=1e-6,
+    )
 
-    train_one_epoch(model, dataloader, optimizer, criterion, device)
+    train_one_epoch(model, dataloader, optimizer, scheduler, criterion, device)

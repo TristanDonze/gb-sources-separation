@@ -5,37 +5,51 @@ from scipy.optimize import linear_sum_assignment
 def _reduce(loss, reduction="mean"):
     if reduction == "mean":
         return loss.mean()
-    elif reduction == "sum":
+    if reduction == "sum":
         return loss.sum()
-    elif reduction == "none":
+    if reduction == "none":
         return loss
-    else:
-        raise ValueError(f"Unknown reduction: {reduction}")
+    raise ValueError(f"Unknown reduction: {reduction}")
 
-def hungarian_assignment(cost):
-    B = cost.shape[0]
+
+def _masked_source_reduce(values, source_mask, reduction="mean"):
+    masked = values * source_mask.to(values.dtype)
+    if reduction == "mean":
+        return masked.sum() / source_mask.sum().clamp_min(1)
+    if reduction == "sum":
+        return masked.sum()
+    if reduction == "none":
+        return masked.sum(dim=1) / source_mask.sum(dim=1).clamp_min(1)
+    raise ValueError(f"Unknown reduction: {reduction}")
+
+
+def hungarian_assignment(cost, K=None):
+    """Return source assignments, using only each sample's active K x K cost."""
+    B, num_pred, num_true = cost.shape
+    if num_pred != num_true:
+        raise ValueError("Hungarian source cost must be square")
+
+    if K is None:
+        K = torch.full((B,), num_pred, dtype=torch.long, device=cost.device)
+    if K.shape != (B,):
+        raise ValueError("K must have shape (B,)")
+
     cost_cpu = cost.detach().cpu().float().numpy()
-
-    assignments = []
-
-    for b in range(B):
-        row_ind, col_ind = linear_sum_assignment(cost_cpu[b])
-
-        row_ind = torch.as_tensor(row_ind, device=cost.device)
-        col_ind = torch.as_tensor(col_ind, device=cost.device)
-
-        assignment = torch.empty(cost.shape[1], dtype=torch.long, device=cost.device)
-        assignment[row_ind] = col_ind
-        assignments.append(assignment)
-
-    return torch.stack(assignments)  # (B, K_pred)
+    assignments = torch.full(
+        (B, num_pred), -1, dtype=torch.long, device=cost.device
+    )
+    for b, k_value in enumerate(K.detach().cpu().tolist()):
+        k = int(k_value)
+        row_ind, col_ind = linear_sum_assignment(cost_cpu[b, :k, :k])
+        assignments[b, torch.as_tensor(row_ind, device=cost.device)] = torch.as_tensor(
+            col_ind, device=cost.device
+        )
+    return assignments
 
 
-def hungarian_loss(cost):
-    assignment = hungarian_assignment(cost)
-    selected_cost = cost.gather(dim=2, index=assignment.unsqueeze(-1)).squeeze(-1)
-
-    return selected_cost.mean(dim=1)  # (B,)
+def _selected_source_cost(cost, assignment, source_mask):
+    selected = cost.gather(dim=2, index=assignment.clamp_min(0).unsqueeze(-1)).squeeze(-1)
+    return selected * source_mask.to(selected.dtype)
 
 
 class FlowMatchingPIT_Loss(nn.Module):
@@ -49,41 +63,26 @@ class FlowMatchingPIT_Loss(nn.Module):
     def scalar_loss(self, diff):
         raise NotImplementedError
 
-    def forward(self, v_pred, X_0, X_1, reduction="mean"):
-        # v_pred: (B, K+1, C, F)
-        # X_0:    (B, K+1, C, F)
-        # X_1:    (B, K+1, C, F)
-
+    def forward(self, v_pred, X_0, X_1, slot_mask, reduction="mean"):
         assert v_pred.shape == X_0.shape == X_1.shape
+        K = slot_mask[:, :-1].sum(dim=1)
+        source_mask = slot_mask[:, :-1]
 
-        pred_sources = v_pred[:, :-1]
-        pred_residual = v_pred[:, -1]
-
-        X0_sources = X_0[:, :-1]
-        X1_sources = X_1[:, :-1]
-
-        X0_residual = X_0[:, -1]
-        X1_residual = X_1[:, -1]
-
-        # target_velocity[b, i, j] = X1_source[j] - X0_slot[i]
-        target_velocity = X1_sources[:, None] - X0_sources[:, :, None]
-        # (B, K_pred, K_true, C, F)
-
-        diff = pred_sources[:, :, None] - target_velocity
-        # (B, K_pred, K_true, C, F)
-
+        target_velocity = X_1[:, None, :-1] - X_0[:, :-1, None]
+        diff = v_pred[:, :-1, None] - target_velocity
         cost = self.pairwise_cost(diff)
-        # (B, K, K)
+        assignment = hungarian_assignment(cost, K)
+        selected_cost = _selected_source_cost(cost, assignment, source_mask)
 
-        source_loss = hungarian_loss(cost) # (B,)
-
-        residual_target_velocity = X1_residual - X0_residual
-        residual_diff = pred_residual - residual_target_velocity
-        residual_loss = self.scalar_loss(residual_diff) # (B, )
-
-        loss = source_loss + self.residual_weight * residual_loss
-
-        return _reduce(loss, reduction), _reduce(source_loss, reduction), _reduce(residual_loss, reduction)
+        residual_diff = v_pred[:, -1] - (X_1[:, -1] - X_0[:, -1])
+        residual_loss = self.scalar_loss(residual_diff)
+        source_loss = _masked_source_reduce(selected_cost, source_mask, reduction)
+        reduced_residual = _reduce(residual_loss, reduction)
+        return (
+            source_loss + self.residual_weight * reduced_residual,
+            source_loss,
+            reduced_residual,
+        )
 
 
 class ReconstructionPIT_Loss(nn.Module):
@@ -97,32 +96,24 @@ class ReconstructionPIT_Loss(nn.Module):
     def scalar_loss(self, diff):
         raise NotImplementedError
 
-    def forward(self, predictions, targets, reduction="mean"):
-        # predictions: (B, K+1, C, F)
-        # targets:     (B, K+1, C, F)
-
+    def forward(self, predictions, targets, slot_mask, reduction="mean"):
         assert predictions.shape == targets.shape
+        K = slot_mask[:, :-1].sum(dim=1)
+        source_mask = slot_mask[:, :-1]
 
-        pred_sources = predictions[:, :-1]
-        true_sources = targets[:, :-1]
-
-        pred_residual = predictions[:, -1]
-        true_residual = targets[:, -1]
-
-        diff = pred_sources[:, :, None] - true_sources[:, None]
-        # (B, K_pred, K_true, C, F)
-
+        diff = predictions[:, :-1, None] - targets[:, None, :-1]
         cost = self.pairwise_cost(diff)
-        # (B, K, K)
+        assignment = hungarian_assignment(cost, K)
+        selected_cost = _selected_source_cost(cost, assignment, source_mask)
 
-        source_loss = hungarian_loss(cost)  # (B,)
-
-        residual_diff = pred_residual - true_residual
-        residual_loss = self.scalar_loss(residual_diff) # (B, )
-
-        loss = source_loss + self.residual_weight * residual_loss
-
-        return _reduce(loss, reduction), _reduce(source_loss, reduction), _reduce(residual_loss, reduction)
+        residual_loss = self.scalar_loss(predictions[:, -1] - targets[:, -1])
+        source_loss = _masked_source_reduce(selected_cost, source_mask, reduction)
+        reduced_residual = _reduce(residual_loss, reduction)
+        return (
+            source_loss + self.residual_weight * reduced_residual,
+            source_loss,
+            reduced_residual,
+        )
 
 
 class FlowMatchingPET_DBNormalizedLoss(nn.Module):
@@ -131,61 +122,49 @@ class FlowMatchingPET_DBNormalizedLoss(nn.Module):
         self.residual_weight = residual_weight
         self.eps = eps
 
-    def find_assignment(self, v_pred, X_0, X_1):
+    def find_assignment(self, v_pred, X_0, X_1, slot_mask):
         assert v_pred.shape == X_0.shape == X_1.shape
+        K = slot_mask[:, :-1].sum(dim=1)
 
-        pred_sources = v_pred[:, :-1]
-        X0_sources = X_0[:, :-1]
-        X1_sources = X_1[:, :-1]
-
-        candidate_target_velocity = X1_sources[:, None] - X0_sources[:, :, None]
-        candidate_diff = pred_sources[:, :, None] - candidate_target_velocity
+        candidate_velocity = X_1[:, None, :-1] - X_0[:, :-1, None]
+        candidate_diff = v_pred[:, :-1, None] - candidate_velocity
         assignment_cost = candidate_diff.pow(2).mean(dim=(-1, -2))
-        return hungarian_assignment(assignment_cost)
+        return hungarian_assignment(assignment_cost, K)
 
-    def align_targets(self, X_1, assignment):
-        X1_sources = X_1[:, :-1]
+    def align_targets(self, X_1, assignment, slot_mask):
+        B, L, C, F = X_1.shape
+        if assignment.shape != (B, L - 1):
+            raise ValueError("assignment has an invalid shape")
 
-        B, K, C, F = X1_sources.shape
-        assert assignment.shape == (B, K)
+        gather_index = assignment.clamp_min(0)[:, :, None, None].expand(B, L - 1, C, F)
+        aligned_sources = X_1[:, :-1].gather(dim=1, index=gather_index)
+        aligned_sources = aligned_sources * slot_mask[:, :-1, None, None]
+        return torch.cat([aligned_sources, X_1[:, -1:]], dim=1)
 
-        gather_index = assignment[:, :, None, None].expand(B, K, C, F)
-        aligned_X1_sources = X1_sources.gather(dim=1, index=gather_index)
-
-        return torch.cat(
-            [aligned_X1_sources, X_1[:, -1:]],
-            dim=1,
-        )
-
-    def forward(self, v_pred, X_0, X_1, assignment, reduction="mean"):
+    def forward(self, v_pred, X_0, X_1, assignment, slot_mask, reduction="mean"):
         assert v_pred.shape == X_0.shape == X_1.shape
+        K = slot_mask[:, :-1].sum(dim=1)
 
-        aligned_X1 = self.align_targets(X_1, assignment)
+        aligned_X1 = self.align_targets(X_1, assignment, slot_mask)
         target_velocity = aligned_X1 - X_0
+        diff = v_pred - target_velocity
+        source_mask = slot_mask[:, :-1]
 
-        diff = v_pred - target_velocity # represents the difference between predicted and target velocities
-
-        source_error = diff[:, :-1].pow(2).sum(dim=(1, 2, 3))
-        residual_error = diff[:, -1].pow(2).sum(dim=(1, 2))
-
-        source_target = target_velocity[:, :-1].pow(2).sum(dim=(1, 2, 3))
-        residual_target = target_velocity[:, -1].pow(2).sum(dim=(1, 2))
-
-        error_energy = source_error + self.residual_weight * residual_error
-        target_energy = source_target + self.residual_weight * residual_target
+        source_error_by_slot = diff[:, :-1].pow(2).sum(dim=(-1, -2))
+        source_target_by_slot = target_velocity[:, :-1].pow(2).sum(dim=(-1, -2))
+        source_error = (source_error_by_slot * source_mask).sum(dim=1)
+        source_target = (source_target_by_slot * source_mask).sum(dim=1)
+        residual_error = diff[:, -1].pow(2).sum(dim=(-1, -2))
+        residual_target = target_velocity[:, -1].pow(2).sum(dim=(-1, -2))
 
         loss = 10 * torch.log10(
-            (error_energy + self.eps) / (target_energy + self.eps)
+            (source_error + self.residual_weight * residual_error + self.eps)
+            / (source_target + self.residual_weight * residual_target + self.eps)
         )
-
-        source_mse = diff[:, :-1].pow(2).mean(dim=(1, 2, 3))
-        residual_mse = diff[:, -1].pow(2).mean(dim=(1, 2))
-
-        return (
-            _reduce(loss, reduction),
-            _reduce(source_mse, reduction),
-            _reduce(residual_mse, reduction),
-        )
+        source_mse_by_slot = diff[:, :-1].pow(2).mean(dim=(-1, -2))
+        source_mse = _masked_source_reduce(source_mse_by_slot, source_mask, reduction)
+        residual_mse = _reduce(diff[:, -1].pow(2).mean(dim=(-1, -2)), reduction)
+        return _reduce(loss, reduction), source_mse, residual_mse
 
 
 class ReconstructionPIT_NMSELoss(nn.Module):
@@ -193,31 +172,28 @@ class ReconstructionPIT_NMSELoss(nn.Module):
         super().__init__()
         self.eps = eps
 
-    def forward(self, predictions, targets, reduction="mean"):
+    def forward(self, predictions, targets, source_mask, reduction="mean"):
         assert predictions.shape == targets.shape
+        if source_mask.shape != predictions.shape[:2]:
+            raise ValueError("source_mask must match prediction source dimensions")
+        K = source_mask.sum(dim=1)
 
-        cost = (
-            predictions[:, :, None] - targets[:, None]
-        ).pow(2).mean(dim=(-1, -2))
+        cost = (predictions[:, :, None] - targets[:, None]).pow(2).mean(dim=(-1, -2))
+        assignment = hungarian_assignment(cost, K)
+        B, S, C, F = targets.shape
+        gather_index = assignment.clamp_min(0)[:, :, None, None].expand(B, S, C, F)
+        aligned = targets.gather(dim=1, index=gather_index)
 
-        assignment = hungarian_assignment(cost)
-
-        B, K, C, F = targets.shape
-        gather_index = assignment[:, :, None, None].expand(B, K, C, F)
-        aligned_slots = targets.gather(dim=1, index=gather_index)
-
-        error_energy = (
-            predictions - aligned_slots
-        ).pow(2).sum(dim=(-1, -2))
-
-        source_energy = aligned_slots.pow(2).sum(dim=(-1, -2))
-
-        nmse_source = error_energy / (source_energy + self.eps)
-        nmse_source_db = 10 * torch.log10(nmse_source + self.eps)
-
+        error_energy = (predictions - aligned).pow(2).sum(dim=(-1, -2))
+        source_energy = aligned.pow(2).sum(dim=(-1, -2))
+        nmse = error_energy / (source_energy + self.eps)
+        nmse_db = 10 * torch.log10(nmse + self.eps)
+        if reduction == "none":
+            mask = source_mask.to(nmse.dtype)
+            return nmse * mask, nmse_db * mask
         return (
-            _reduce(nmse_source, reduction),
-            _reduce(nmse_source_db, reduction),
+            _masked_source_reduce(nmse, source_mask, reduction),
+            _masked_source_reduce(nmse_db, source_mask, reduction),
         )
 
 

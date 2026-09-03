@@ -22,6 +22,7 @@ class GalacticBinariesDataset(Dataset):
         returns_snr: bool = False,
         deterministic: bool = False,
         seed: int | None = None,
+        k_sampling_probs=None,
     ):
         self.waveforms = waveforms
         self.attr_names = list(params_dict.keys())
@@ -46,10 +47,17 @@ class GalacticBinariesDataset(Dataset):
         self.deterministic = deterministic
         self.seed = seed
         self.rng = np.random.default_rng(seed)
+        self.k_sampling_probs = self._validate_k_sampling_probs(
+            k_sampling_probs, max_K
+        )
 
         if constant_K is True:
             raise ValueError("constant_K cannot be True. It must be either False or an integer value.")
-        
+
+        self.num_source_slots = (
+            self.max_K if self.constant_K is False else int(self.constant_K)
+        )
+
         if self.max_K > self.nb_selected_waveforms:
             raise ValueError(
                 f"max_K={self.max_K} cannot be greater than "
@@ -83,12 +91,41 @@ class GalacticBinariesDataset(Dataset):
 
         return np.sort(indices)
 
+    @staticmethod
+    def _validate_k_sampling_probs(k_sampling_probs, max_K):
+        if k_sampling_probs is None:
+            return None
+
+        probabilities = np.asarray(k_sampling_probs, dtype=np.float64)
+        if probabilities.shape != (max_K,):
+            raise ValueError(
+                "k_sampling_probs must contain exactly max_K probabilities "
+                f"(expected {max_K}, got {probabilities.size})"
+            )
+        if not np.all(np.isfinite(probabilities)):
+            raise ValueError("k_sampling_probs must contain only finite values")
+        if np.any(probabilities < 0):
+            raise ValueError("k_sampling_probs cannot contain negative values")
+        if not np.isclose(probabilities.sum(), 1.0, rtol=1e-6, atol=1e-8):
+            raise ValueError(
+                "k_sampling_probs must sum to 1 "
+                f"(got {probabilities.sum():.8f})"
+            )
+        return probabilities
+
     def __len__(self):
         return self.length
 
     def _sample_k(self, idx):
         if self.constant_K is not False:
             return int(self.constant_K)
+        if self.k_sampling_probs is not None:
+            return int(
+                self.rng.choice(
+                    np.arange(1, self.max_K + 1),
+                    p=self.k_sampling_probs,
+                )
+            )
         return int(self.rng.integers(1, self.max_K + 1))
 
     def _sample_indices_for_k(self, k, idx):
@@ -126,12 +163,12 @@ class GalacticBinariesDataset(Dataset):
         params = {}
         for attr in self.attr_names:
             values = np.asarray(getattr(self, attr)[sampled_indices])
-            padded_shape = (self.max_K,) + values.shape[1:]
+            padded_shape = (self.num_source_slots,) + values.shape[1:]
             padded = np.zeros(padded_shape, dtype=values.dtype)
             padded[:k] = values
             params[attr] = padded
 
-        params["source_mask"] = np.arange(self.max_K) < k
+        params["source_mask"] = np.arange(self.num_source_slots) < k
         params.update(self._build_frequency_support_params(sampled_indices, k))
         return params
 
@@ -145,10 +182,10 @@ class GalacticBinariesDataset(Dataset):
             channel_axes = tuple(range(1, source_waveforms.ndim - 1))
             freq_energy = np.sum(source_waveforms ** 2, axis=channel_axes)
 
-        starts = np.full(self.max_K, -1, dtype=np.int16)
-        stops = np.full(self.max_K, -1, dtype=np.int16)
-        peaks = np.full(self.max_K, -1, dtype=np.int16)
-        widths = np.zeros(self.max_K, dtype=np.int16)
+        starts = np.full(self.num_source_slots, -1, dtype=np.int16)
+        stops = np.full(self.num_source_slots, -1, dtype=np.int16)
+        peaks = np.full(self.num_source_slots, -1, dtype=np.int16)
+        widths = np.zeros(self.num_source_slots, dtype=np.int16)
 
         for source_idx in range(k):
             energy = freq_energy[source_idx]
@@ -201,19 +238,27 @@ class GalacticBinariesDataset(Dataset):
         mixture = mixture.astype(np.float32, copy=False)
         residual = residual.astype(np.float32, copy=False)
 
-        X_1 = np.concatenate(
-            [sources, residual[None, ...]], axis=0
-        ).astype(np.float32, copy=False)
+        X_1 = np.zeros(
+            (self.num_source_slots + 1,) + sources.shape[1:],
+            dtype=np.float32,
+        )
+        X_1[:K] = sources
+        X_1[-1] = residual
+
+        slot_mask = np.zeros(self.num_source_slots + 1, dtype=np.bool_)
+        slot_mask[:K] = True
+        slot_mask[-1] = True
 
         if self.returns_snr:
-            snrs = np.asarray(self.snr[waveform_indices], dtype=np.float32)
-            return mixture, X_1, K, snrs
+            snrs = np.zeros(self.num_source_slots, dtype=np.float32)
+            snrs[:K] = np.asarray(self.snr[waveform_indices], dtype=np.float32)
+            return mixture, X_1, K, slot_mask, snrs
 
         if self.return_params:
             params = self._build_padded_params(waveform_indices, K)
-            return mixture, X_1, K, params 
+            return mixture, X_1, K, slot_mask, params
 
-        return mixture, X_1, K  
+        return mixture, X_1, K, slot_mask
 
 
 class TrainDataset(GalacticBinariesDataset):
@@ -233,6 +278,7 @@ class TrainDataset(GalacticBinariesDataset):
         returns_snr: bool = False,
         deterministic: bool = False,
         seed: int | None = None,
+        k_sampling_probs=None,
     ):
         super().__init__(
             waveforms=waveforms,
@@ -246,6 +292,7 @@ class TrainDataset(GalacticBinariesDataset):
             returns_snr=returns_snr,
             deterministic=deterministic,
             seed=seed,
+            k_sampling_probs=k_sampling_probs,
         )
 
         # self.random_global_scale = random_global_scale
@@ -396,6 +443,7 @@ def create_train_val_datasets(
     snr_bin_width : float = 1.0,
     seed_train : int = 42,
     seed_val : int = 0,
+    k_sampling_probs_train=None,
 ):
     with h5py.File(dataset_path, "r") as f:
         logger.info(f"Loading waveforms from {dataset_path}...")
@@ -441,6 +489,7 @@ def create_train_val_datasets(
         return_params=return_params,
         returns_snr=returns_snr,
         seed=seed_train,
+        k_sampling_probs=k_sampling_probs_train,
     ) if len(train_indices) > 0 else None
 
     val_dataset = ValidationDataset(
@@ -499,12 +548,13 @@ if __name__ == "__main__":
     )
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-    for batch_idx, (mixture, X_1, K, snrs) in enumerate(train_loader):
+    for batch_idx, (mixture, X_1, K, slot_mask, snrs) in enumerate(train_loader):
         print(f"Batch {batch_idx}:")
         print(f"  mixture shape: {mixture.shape}")
         print(f"  X_1 shape: {X_1.shape}")
         print(f"  K shape: {K.shape}")
         print(f"  K values: {K}")
+        print(f"  slot mask: {slot_mask}")
         print(f"  snrs shape: {snrs.shape}")
         print(f"  SNR values: {snrs}")
 
