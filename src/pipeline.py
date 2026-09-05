@@ -15,6 +15,7 @@ from src.scheduler import PolynomialDecayLR
 from src.utils import (
     get_device,
     load_checkpoint,
+    load_warm_start_checkpoint,
     save_checkpoint,
     seed_everything,
     seed_worker,
@@ -41,6 +42,7 @@ from config import (
     MAX_K,
     CONSTANT_K,
     K_TRAIN_PROBS,
+    WARM_START_CHECKPOINT,
     RESIDUAL_WEIGHT,
     BATCH_SIZE,
     WEIGHT_DECAY,
@@ -75,7 +77,20 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         max_k=MAX_K,
         n_blocks=N_BLOCKS,
         dropout=DROPOUT,
-    ).to(device)
+    )
+    warm_start_info = None
+    if WARM_START_CHECKPOINT is not None and load_checkpoint_path is None:
+        warm_start_info = load_warm_start_checkpoint(model, WARM_START_CHECKPOINT)
+        logger.info(
+            "Warm-started model from %s (epoch=%s, MAX_K=%d -> %d, "
+            "new K embeddings copied from K=%d)",
+            WARM_START_CHECKPOINT,
+            warm_start_info["checkpoint_epoch"],
+            warm_start_info["source_max_k"],
+            warm_start_info["target_max_k"],
+            warm_start_info["new_k_initialized_from"],
+        )
+    model = model.to(device)
     logger.info(f"Total number of parameters: {sum(p.numel() for p in model.parameters())}")
     logger.info("Model architecture:")
     for name, module in model.named_modules():
@@ -160,6 +175,12 @@ def train(checkpoint_dir, load_checkpoint_path=None):
         "max_k": MAX_K,
         "constant_k": CONSTANT_K,
         "k_train_probs": K_TRAIN_PROBS,
+        "warm_start_checkpoint": (
+            str(WARM_START_CHECKPOINT) if warm_start_info is not None else None
+        ),
+        "warm_start_source_max_k": (
+            warm_start_info["source_max_k"] if warm_start_info is not None else None
+        ),
     }
     aim_run["dataset"] = {
         "dataset_path": str(dataset_path),

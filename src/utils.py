@@ -6,6 +6,78 @@ import torch
 from torch.utils.data import get_worker_info
 
 
+def load_warm_start_checkpoint(model, path):
+    """Load model weights while expanding the categorical K embedding.
+
+    All parameters except ``k_emb.weight`` must have exactly the same shape.
+    Existing K rows are copied verbatim and new rows start from the last
+    learned K embedding. Optimizer, scheduler, histories and epoch counters
+    are deliberately not restored.
+    """
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    source_state = checkpoint.get("model_state_dict", checkpoint)
+    target_state = model.state_dict()
+    embedding_key = "k_emb.weight"
+
+    if embedding_key not in source_state or embedding_key not in target_state:
+        raise KeyError(f"Missing {embedding_key!r} in warm-start checkpoint or model")
+
+    source_keys = set(source_state)
+    target_keys = set(target_state)
+    if source_keys != target_keys:
+        missing = sorted(target_keys - source_keys)
+        unexpected = sorted(source_keys - target_keys)
+        raise ValueError(
+            "Warm-start architecture mismatch: "
+            f"missing keys={missing}, unexpected keys={unexpected}"
+        )
+
+    for name, source_value in source_state.items():
+        if name == embedding_key:
+            continue
+        if source_value.shape != target_state[name].shape:
+            raise ValueError(
+                f"Warm-start shape mismatch for {name}: "
+                f"checkpoint={tuple(source_value.shape)}, "
+                f"model={tuple(target_state[name].shape)}"
+            )
+
+    source_embedding = source_state[embedding_key]
+    target_embedding = target_state[embedding_key].clone()
+    if (
+        source_embedding.ndim != 2
+        or source_embedding.shape[1] != target_embedding.shape[1]
+    ):
+        raise ValueError(
+            f"Incompatible {embedding_key} shapes: "
+            f"checkpoint={tuple(source_embedding.shape)}, "
+            f"model={tuple(target_embedding.shape)}"
+        )
+    if source_embedding.shape[0] > target_embedding.shape[0]:
+        raise ValueError(
+            "Warm-start cannot shrink k_emb: "
+            f"checkpoint rows={source_embedding.shape[0]}, "
+            f"model rows={target_embedding.shape[0]}"
+        )
+
+    learned_rows = source_embedding.shape[0]
+    target_embedding[:learned_rows] = source_embedding
+    if learned_rows < target_embedding.shape[0]:
+        target_embedding[learned_rows:] = source_embedding[-1]
+
+    adapted_state = dict(source_state)
+    adapted_state[embedding_key] = target_embedding
+    model.load_state_dict(adapted_state, strict=True)
+
+    checkpoint_epoch = checkpoint.get("epoch")
+    return {
+        "checkpoint_epoch": None if checkpoint_epoch is None else checkpoint_epoch + 1,
+        "source_max_k": learned_rows - 1,
+        "target_max_k": target_embedding.shape[0] - 1,
+        "new_k_initialized_from": learned_rows - 1,
+    }
+
+
 def seed_everything(seed: int) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
