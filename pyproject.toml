@@ -18,6 +18,7 @@ dependencies = [
     "nvidia-cusparselt-cu12==0.7.1 ; sys_platform == 'linux'",
     "nvidia-nccl-cu12==2.28.9 ; sys_platform == 'linux'",
     "nvidia-nvshmem-cu12==3.4.5 ; sys_platform == 'linux'",
+    "nvidia-ml-py>=13.610.43",
 ]
 
 [[tool.uv.index]]

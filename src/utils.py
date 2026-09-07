@@ -1,6 +1,6 @@
 import os
 import random
-
+import pynvml
 import numpy as np
 import torch
 from torch.utils.data import get_worker_info
@@ -31,16 +31,25 @@ def seed_worker(worker_id: int) -> None:
 
 
 def get_device():
+    pynvml.nvmlInit()
+
     free_memory = []
 
     for i in range(torch.cuda.device_count()):
-        free, total = torch.cuda.mem_get_info(i)
-        free_memory.append(free)
+        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        free_memory.append(info.free)
+
+    pynvml.nvmlShutdown()
+
+    print(
+        "Free memory on GPUs:",
+        [f"{mem / 1024**3:.1f} GB" for mem in free_memory],
+    )
 
     best_gpu = free_memory.index(max(free_memory))
 
-    device = torch.device(f"cuda:{best_gpu}")
-    return device
+    return torch.device(f"cuda:{best_gpu}")
 
 def save_checkpoint(
     model,
