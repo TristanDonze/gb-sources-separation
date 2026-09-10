@@ -1,0 +1,16 @@
+{
+  "run": "/sps/l2it/tdonze/gb-sources-separation/runs/run_20260903_170728",
+  "checkpoint": "/sps/l2it/tdonze/gb-sources-separation/runs/run_20260903_170728/checkpoints/best_checkpoint.pth",
+  "checkpoint_epoch": 23,
+  "dataset": "/sps/l2it/tdonze/gb-dataset-gen/data/synthetic_dataset/dataset_3M_2.0e-23_1.0e-22_filtering_True_10_100_difficulty_1/dataset.hdf5",
+  "mixtures": 10000,
+  "samplings": 10,
+  "steps": 32,
+  "seed": 0,
+  "nmse_file": "nmse_by_sampling_and_source.csv",
+  "uncertainty_file": "uncertainty_by_source.csv",
+  "snr_plot_default": "snr_gap",
+  "frequency_support": "first/last bins with energy >= 1% of the source maximum",
+  "frequency_support_relative_threshold": 0.01,
+  "frequency_overlap_pairwise": "mean ordered-pair coverage: mean_i mean_j!=i |I_i intersect I_j| / |I_i|"
+}
