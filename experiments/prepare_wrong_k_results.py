@@ -16,6 +16,7 @@ from prepare_protocol_results import (
     integrate_samples,
     load_model,
     make_validation_dataset,
+    medoid_normalized_uncertainty,
 )
 from src.utils import get_device
 
@@ -191,8 +192,8 @@ def main():
                         dispersion_energy = float(
                             np.mean(np.sum(deviations**2, axis=(1, 2, 3)))
                         )
-                        prediction_energy = float(
-                            np.mean(np.sum(aligned**2, axis=(1, 2, 3)))
+                        u_by_source, _, _ = medoid_normalized_uncertainty(
+                            aligned
                         )
                         target_sources = target[local_index, :k].numpy()
                         target_energy = float(np.sum(target_sources**2))
@@ -202,9 +203,7 @@ def main():
                                 "true_K": k,
                                 "given_K": inferred_k,
                                 "delta_K": delta,
-                                "u_pred": np.sqrt(
-                                    dispersion_energy / (prediction_energy + 1e-12)
-                                ),
+                                "u_pred": float(u_by_source.mean()),
                                 "u_true": np.sqrt(
                                     dispersion_energy / (target_energy + 1e-12)
                                 ),
@@ -238,6 +237,15 @@ def main():
         "true_k_range": [args.min_k, args.max_k],
         "conditions": [-1, 0, 1],
         "alignment": "iterative consensus initialized by a medoid",
+        "u_pred": (
+            "arithmetic mean across inferred sources of sampling-dispersion "
+            "RMS normalized by the RMS of each source-specific medoid"
+        ),
+        "u_pred_medoid": (
+            "sample minimizing squared distance to the consensus-aligned "
+            "sampling mean, selected independently for each inferred source"
+        ),
+        "u_true": "global dispersion energy normalized by true-source energy",
         "nmse": "global cardinality-aware NMSE with zero padding",
         "result_file": result_path.name,
     }

@@ -173,6 +173,27 @@ def align_samples_to_target(predictions, target_sources):
     return aligned
 
 
+def medoid_normalized_uncertainty(aligned):
+    """Return per-source dispersion normalized by a source-specific medoid.
+
+    ``aligned`` has shape (samplings, sources, channels, frequencies). For each
+    source, the medoid is the sampled reconstruction with the smallest squared
+    distance to the sampling mean. With squared Euclidean distance, this is
+    also the sample minimizing its mean squared distance to all other samples.
+    """
+    consensus = aligned.mean(axis=0)
+    squared_deviations = (aligned - consensus[None]) ** 2
+    dispersion_rms = np.sqrt(
+        np.mean(squared_deviations, axis=(0, 2, 3))
+    )
+
+    medoid_indices = np.mean(squared_deviations, axis=(2, 3)).argmin(axis=0)
+    source_indices = np.arange(aligned.shape[1])
+    medoids = aligned[medoid_indices, source_indices]
+    medoid_rms = np.sqrt(np.mean(medoids**2, axis=(1, 2)))
+    return dispersion_rms / (medoid_rms + 1e-12), dispersion_rms, medoid_indices
+
+
 def effective_frequency_bounds(target_sources, relative_threshold=1e-2):
     energy = np.sum(target_sources.astype(np.float64) ** 2, axis=1)
     starts = []
@@ -452,13 +473,10 @@ def main():
                     target_energy = np.sum(target_sources**2, axis=(-1, -2))
                     nmse = error_energy / (target_energy[None] + 1e-12)
 
-                    consensus = aligned.mean(axis=0)
-                    dispersion_rms = np.sqrt(
-                        np.mean((aligned - consensus[None]) ** 2, axis=(0, 2, 3))
+                    u_pred, dispersion_rms, _ = medoid_normalized_uncertainty(
+                        aligned
                     )
-                    prediction_rms = np.sqrt(np.mean(aligned**2, axis=(0, 2, 3)))
                     target_rms = np.sqrt(np.mean(target_sources**2, axis=(1, 2)))
-                    u_pred = dispersion_rms / (prediction_rms + 1e-12)
                     u_true = dispersion_rms / (target_rms + 1e-12)
 
                     common = {
@@ -516,6 +534,14 @@ def main():
         "frequency_overlap_pairwise": (
             "mean ordered-pair coverage: mean_i mean_j!=i "
             "|I_i intersect I_j| / |I_i|"
+        ),
+        "u_pred": (
+            "per-source sampling-dispersion RMS normalized by the RMS of the "
+            "source-specific medoid reconstruction"
+        ),
+        "medoid": (
+            "sample minimizing squared distance to the aligned sampling mean, "
+            "selected independently for each source"
         ),
     }
     with paths["metadata"].open("w") as file:
