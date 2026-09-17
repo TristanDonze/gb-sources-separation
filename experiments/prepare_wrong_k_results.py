@@ -140,8 +140,9 @@ def main():
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     fields = [
-        "mixture_id", "true_K", "given_K", "delta_K", "u_pred", "u_true",
-        "nmse", "consensus_converged", "consensus_iterations", "medoid_sampling",
+        "mixture_id", "true_K", "given_K", "delta_K", "u_sources", "u_res",
+        "u_tot", "e_res", "u_true", "nmse", "consensus_converged",
+        "consensus_iterations", "medoid_sampling",
     ]
     with result_path.open("w", newline="") as result_file:
         writer = csv.DictWriter(result_file, fieldnames=fields)
@@ -152,6 +153,7 @@ def main():
             for batch_index, (mixture, target, true_k, original_mask) in enumerate(
                 loader, start=1
             ):
+                mixture_values = mixture.numpy()
                 mixture = mixture.to(device)
                 target_device = target.to(device)
                 true_k_device = true_k.to(device)
@@ -195,6 +197,23 @@ def main():
                         u_by_source, _, _ = medoid_normalized_uncertainty(
                             aligned
                         )
+                        predicted_residuals = predictions[local_index, :, -1]
+                        u_res = float(
+                            medoid_normalized_uncertainty(
+                                predicted_residuals[:, None]
+                            )[0][0]
+                        )
+                        u_sources = float(u_by_source.mean())
+                        u_tot = float(
+                            (u_by_source.sum() + u_res) / (inferred_k + 1)
+                        )
+                        residual_energy = float(np.mean(predicted_residuals**2))
+                        mixture_energy = float(
+                            np.mean(mixture_values[local_index] ** 2)
+                        )
+                        e_res = np.sqrt(
+                            residual_energy / (mixture_energy + 1e-12)
+                        )
                         target_sources = target[local_index, :k].numpy()
                         target_energy = float(np.sum(target_sources**2))
                         batch_rows.append(
@@ -203,7 +222,10 @@ def main():
                                 "true_K": k,
                                 "given_K": inferred_k,
                                 "delta_K": delta,
-                                "u_pred": float(u_by_source.mean()),
+                                "u_sources": u_sources,
+                                "u_res": u_res,
+                                "u_tot": u_tot,
+                                "e_res": e_res,
                                 "u_true": np.sqrt(
                                     dispersion_energy / (target_energy + 1e-12)
                                 ),
@@ -237,13 +259,26 @@ def main():
         "true_k_range": [args.min_k, args.max_k],
         "conditions": [-1, 0, 1],
         "alignment": "iterative consensus initialized by a medoid",
-        "u_pred": (
+        "u_sources": (
             "arithmetic mean across inferred sources of sampling-dispersion "
             "RMS normalized by the RMS of each source-specific medoid"
         ),
-        "u_pred_medoid": (
+        "u_res": (
+            "sampling-dispersion RMS of the residual slot normalized by the "
+            "RMS of its medoid reconstruction"
+        ),
+        "u_tot": (
+            "arithmetic mean of the medoid-normalized sampling dispersion "
+            "across all inferred source slots and the residual slot"
+        ),
+        "e_res": (
+            "RMS of the residual slot across samplings normalized by the RMS "
+            "of the observed mixture"
+        ),
+        "uncertainty_medoid": (
             "sample minimizing squared distance to the consensus-aligned "
-            "sampling mean, selected independently for each inferred source"
+            "sampling mean, selected independently for each source and for "
+            "the residual"
         ),
         "u_true": "global dispersion energy normalized by true-source energy",
         "nmse": "global cardinality-aware NMSE with zero padding",
