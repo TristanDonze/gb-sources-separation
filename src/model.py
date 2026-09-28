@@ -20,7 +20,7 @@ class FlowSeparator(nn.Module):
             for _ in range(n_blocks)
         ])
 
-        self.out = nn.Linear(dim_model, 4)
+        self.out = nn.Linear(dim_model, 4) # might be interesting to try a deconv1d here
 
     def forward(self, 
                 x_t : torch.Tensor, 
