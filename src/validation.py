@@ -25,7 +25,7 @@ def evaluate(model, dataloader, criteria, device, timing=True):
 
     time_grid = 0.5 * (
         1 - torch.cos(torch.linspace(0.0, torch.pi, NB_OF_STEPS + 1))
-    )
+    ) # scheduler's euler solver
     generator = torch.Generator(device=device)
     generator.manual_seed(0)
 
