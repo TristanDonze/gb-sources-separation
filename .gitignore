@@ -242,3 +242,6 @@ TODO.MD
 
 # pkl
 *.pkl
+
+# experiments
+experiments/
